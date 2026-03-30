@@ -1,12 +1,15 @@
 import streamlit as st
 import requests
 import urllib3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# 【V2.9 核心升級】強制鎖定台灣時區 (UTC+8)，無懼雲端主機位置
+TW_TZ = timezone(timedelta(hours=8))
+
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.8", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.9", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -33,7 +36,9 @@ with st.sidebar:
 
 # --- 2. 參數與台電規則 ---
 SOLAR_MAX_KW, MAG_MAX_KW = 146.0, 141.8
-current_month = datetime.now().month
+
+# 替換為台灣時間
+current_month = datetime.now(TW_TZ).month
 CONTRACT_LIMIT, season_tag = (452.0, "夏月") if 6 <= current_month <= 9 else (516.0, "非夏月")
 
 historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530, 8: 504, 9: 428, 10: 460, 11: 500, 12: 394}
@@ -54,7 +59,9 @@ def wmo_to_text(wmo):
 def get_dual_weather():
     res_dict = {"cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0},
                 "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0, "hourly": {}}}
-    tmr_prefix = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # 替換為台灣時間
+    tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     
     try:
         lat, lon = "23.936537", "120.697917"
@@ -107,10 +114,8 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-# 【客製化 1】抬頭修改
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.8")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.9")
 
-# 【客製化 2】核心指令修改
 st.markdown("### 🔔 健維-空調核心指令 (今晚任務)")
 col_main, col_info = st.columns([2, 1])
 
@@ -131,7 +136,6 @@ with col_info:
 action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
 
-# 【客製化 3】中央監控系統標題修改
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("### 📝 中央監控系統 (儲融冰) 排程設定建議")
 sc1, sc2 = st.columns(2)
@@ -155,7 +159,6 @@ with sc2:
     """, unsafe_allow_html=True)
 
 st.markdown("---")
-# 【客製化 4】明日關鍵時段標題修改
 st.subheader("🎯 明日關鍵時段預報追蹤")
 if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
     h_cols = st.columns(5)
@@ -171,7 +174,6 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
             else: st.write("資料擷取中...")
 
 st.markdown("---")
-
 st.subheader("📊 決策基礎數據分析")
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("歷史基礎負載", f"{base_load_historical:.1f} kW")
@@ -180,4 +182,5 @@ c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW")
 c4.metric("🔥 最終預測負載", f"{final_predicted_demand:.1f} kW", "總和預估", delta_color="off")
 c5.metric("⚡ 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
-st.markdown(f"系統運行中 | 資料更新：{datetime.now().strftime('%H:%M:%S')} | 座標鎖定：23.9365, 120.6979")
+# 替換為台灣時間
+st.markdown(f"系統運行中 | 資料更新：{datetime.now(TW_TZ).strftime('%H:%M:%S')} | 座標鎖定：23.9365, 120.6979")
