@@ -131,7 +131,7 @@ end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
 st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.16")
-st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
+st.markdown("### 🔔 健維哥-(今晚儲冰任務)請於上班日17:00前完成排程設定")
 
 c_action, c_metrics = st.columns([1.2, 1])
 
