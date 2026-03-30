@@ -9,11 +9,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.12", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.13", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
-    .action-call { background-color: #1E3A8A; color: white; padding: 15px; border-radius: 10px; font-size: 24px; font-weight: bold; text-align: center; margin-top: 20px; }
+    .ice-card { background-color: white; padding: 15px; border-radius: 15px; text-align: center; box-shadow: 2px 2px 10px rgba(0,0,0,0.05); }
+    .ice-value { font-size: 70px; font-weight: 900; color: #1f77b4; line-height: 1.1; }
+    .ice-unit { font-size: 24px; color: #555; font-weight: bold; }
+    .action-call { background-color: #1E3A8A; color: white; padding: 15px; border-radius: 10px; font-size: 24px; font-weight: bold; text-align: center; margin-top: 15px; }
     .schedule-box { padding: 20px; border-radius: 10px; border: 2px dashed #4682B4; background-color: #F0F8FF; font-size: 20px;}
     .schedule-time { font-size: 32px; font-weight: bold; color: #D2691E; }
     </style>
@@ -118,10 +121,10 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.12")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.13")
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
-# 【全新排版 1】全螢幕寬度的「即時觀測狀態列」
+# 橫幅觀測列
 st.markdown(f"""
     <div style="display: flex; align-items: center; justify-content: space-between; background-color: #f8f9fa; padding: 15px 30px; border-radius: 12px; border: 1px solid #e9ecef; border-left: 6px solid #17a2b8; margin-bottom: 25px; box-shadow: 2px 2px 10px rgba(0,0,0,0.02);">
         <div style="font-size: 16px; color: #555; font-weight: bold;">📍 目前園區即時微氣候觀測</div>
@@ -131,16 +134,18 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-# 【全新排版 2】完美對稱的 3 欄式佈局 (比例 1.5 : 1 : 1)
-c_action, c_temp, c_solar = st.columns([1.5, 1, 1])
+# 【終極排版】採用 1:1:1 絕對均分佈局
+c_action, c_temp, c_solar = st.columns(3)
 
 with c_action:
     border_color = "#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 4 else "#dc3545"
     st.markdown(f"""
-        <div style="background-color: white; padding: 25px 20px; border-radius: 15px; border: 4px solid {border_color}; text-align: center; box-shadow: 4px 4px 15px rgba(0,0,0,0.05);">
-            <p style="font-size: 22px; margin-bottom: 5px; color: #666; font-weight: bold;">建議今晚儲冰時間</p>
-            <span style="font-size: 65px !important; font-weight: 900; color: #1f77b4; line-height: 1;">{suggested_ice_hrs:.1f}</span>
-            <span style="font-size: 24px; color: #555; font-weight: bold;"> 小時</span>
+        <div class="ice-card" style="border: 4px solid {border_color};">
+            <div style="font-size: 18px; color: #666; font-weight: bold; margin-bottom: 5px;">建議今晚儲冰時間</div>
+            <div>
+                <span class="ice-value">{suggested_ice_hrs:.1f}</span>
+                <span class="ice-unit">小時</span>
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -150,11 +155,9 @@ with c_temp:
 with c_solar:
     st.metric("明日太陽能發電估值", f"{est_solar:.1f} kW", delta=f"依據 {cloud}% 雲量計算 (保底值)")
 
-# 跑馬燈指令
 action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
 
-# 中央監控面板
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("### 📝 中央監控系統 (儲融冰) 排程設定建議")
 sc1, sc2 = st.columns(2)
