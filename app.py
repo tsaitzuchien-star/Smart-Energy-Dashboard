@@ -5,11 +5,11 @@ from datetime import datetime, timedelta, timezone
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 【V2.9 核心升級】強制鎖定台灣時區 (UTC+8)，無懼雲端主機位置
+# 強制鎖定台灣時區 (UTC+8)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.9", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.10", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -36,8 +36,6 @@ with st.sidebar:
 
 # --- 2. 參數與台電規則 ---
 SOLAR_MAX_KW, MAG_MAX_KW = 146.0, 141.8
-
-# 替換為台灣時間
 current_month = datetime.now(TW_TZ).month
 CONTRACT_LIMIT, season_tag = (452.0, "夏月") if 6 <= current_month <= 9 else (516.0, "非夏月")
 
@@ -57,17 +55,24 @@ def wmo_to_text(wmo):
 # --- 3. 氣象抓取 ---
 @st.cache_data(ttl=300)
 def get_dual_weather():
-    res_dict = {"cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0},
-                "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0, "hourly": {}}}
+    res_dict = {"cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "humidity": "--", "tmr_temp": 25.0},
+                "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "humidity": "--", "tmr_temp": 25.0, "hourly": {}}}
     
-    # 替換為台灣時間
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     
     try:
         lat, lon = "23.936537", "120.697917"
-        om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,weather_code&hourly=temperature_2m,cloud_cover,weather_code&timezone=Asia%2FTaipei"
+        # 【V2.10 更新】API 網址加入 relative_humidity_2m 抓取濕度
+        om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,cloud_cover,weather_code&hourly=temperature_2m,cloud_cover,weather_code&timezone=Asia%2FTaipei"
         r = requests.get(om_url, timeout=5).json()
-        res_dict["owm"] = {"status": "🟢", "wx": wmo_to_text(r['current']['weather_code']), "cloud": r['current']['cloud_cover'], "temp": r['current']['temperature_2m'], "hourly": {}}
+        res_dict["owm"] = {
+            "status": "🟢", 
+            "wx": wmo_to_text(r['current']['weather_code']), 
+            "cloud": r['current']['cloud_cover'], 
+            "temp": r['current']['temperature_2m'], 
+            "humidity": r['current']['relative_humidity_2m'], # 新增濕度
+            "hourly": {}
+        }
         
         target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
         times_list = r['hourly']['time']
@@ -88,14 +93,19 @@ def get_dual_weather():
         cwa_url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization=CWA-3DD5DB13-517F-4C53-8A1C-0D2FB1595975&locationName=南投縣"
         r = requests.get(cwa_url, verify=False, timeout=5).json()
         wx = r['records']['location'][0]['weatherElement'][0]['time'][0]['parameter']['parameterName']
-        res_dict["cwa"] = {"status": "🟢", "wx": wx, "cloud": 30 if "晴" in wx else 70, "temp": 25.0, "tmr_temp": 28.0}
+        res_dict["cwa"] = {"status": "🟢", "wx": wx, "cloud": 30 if "晴" in wx else 70, "temp": 25.0, "humidity": "--", "tmr_temp": 28.0}
     except: pass
         
     return res_dict
 
 w = get_dual_weather()
 sel = w["owm"] if "國際" in primary_brain and w["owm"]["status"] == "🟢" else w["cwa"]
-cloud, temp, tmr_temp = (manual_cloud, manual_temp, manual_temp) if use_manual else (sel["cloud"], sel["temp"], sel["tmr_temp"])
+
+# 判斷是否為手動展示模式
+if use_manual:
+    cloud, temp, tmr_temp, humidity = manual_cloud, manual_temp, manual_temp, 60
+else:
+    cloud, temp, tmr_temp, humidity = sel["cloud"], sel["temp"], sel["tmr_temp"], sel.get("humidity", "--")
 
 # --- 4. 大腦運算 ---
 temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
@@ -114,9 +124,9 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.9")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.10")
 
-st.markdown("### 🔔 健維-空調核心指令 (今晚任務)")
+st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 col_main, col_info = st.columns([2, 1])
 
 with col_main:
@@ -130,6 +140,16 @@ with col_main:
         """, unsafe_allow_html=True)
 
 with col_info:
+    # 【V2.10 新增】即時觀測精緻面板
+    st.markdown(f"""
+        <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; border-left: 5px solid #17a2b8; margin-bottom: 20px;">
+            <div style="font-size: 14px; color: #666; margin-bottom: 5px;">📍 目前園區即時觀測</div>
+            <div style="font-size: 18px; font-weight: bold; color: #333; letter-spacing: 0.5px;">
+                🌡️ {temp}°C &nbsp;|&nbsp; 💧 {humidity}% &nbsp;|&nbsp; ☁️ {cloud}%
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
     st.metric("明日預測最高溫 (防禦基準)", f"{tmr_temp} °C", delta=f"{tmr_temp-25:.1f} °C (高溫熱負荷啟動)", delta_color="inverse")
     st.metric("明日太陽能發電估值", f"{est_solar:.1f} kW", delta=f"依據 {cloud}% 雲量計算 (保底值)")
 
@@ -182,5 +202,4 @@ c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW")
 c4.metric("🔥 最終預測負載", f"{final_predicted_demand:.1f} kW", "總和預估", delta_color="off")
 c5.metric("⚡ 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
-# 替換為台灣時間
 st.markdown(f"系統運行中 | 資料更新：{datetime.now(TW_TZ).strftime('%H:%M:%S')} | 座標鎖定：23.9365, 120.6979")
