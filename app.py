@@ -9,13 +9,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.15", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.16", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
     .ice-card { 
         background-color: white; 
-        padding: 60px 20px; 
+        padding: 40px 20px; /* 稍微縮小上下 padding，配合右邊緊湊排版 */
         border-radius: 15px; 
         text-align: center; 
         box-shadow: 2px 2px 10px rgba(0,0,0,0.05); 
@@ -130,10 +130,9 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.15")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.16")
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
-# 【排版優化】調整左右比例為 1.2 : 1，把左邊框框放大，逼迫右邊的數據集中
 c_action, c_metrics = st.columns([1.2, 1])
 
 with c_action:
@@ -149,18 +148,31 @@ with c_action:
         """, unsafe_allow_html=True)
 
 with c_metrics:
-    # 把原本用來隔開上下的 margin 移除，讓四個數據更緊密
-    row1_c1, row1_c2 = st.columns(2)
-    with row1_c1:
-        st.metric("目前園區氣溫", f"{temp} °C", delta="即時微氣候觀測", delta_color="off")
-    with row1_c2:
-        st.metric("目前園區雲量", f"{cloud} %", delta="決定今日效率", delta_color="off")
-    
-    row2_c1, row2_c2 = st.columns(2)
-    with row2_c1:
-        st.metric("明日預測最高溫 (防禦基準)", f"{tmr_temp} °C", delta=f"{tmr_temp-25:.1f} °C (高溫熱負荷)", delta_color="inverse")
-    with row2_c2:
-        st.metric("明日太陽能發電估值", f"{est_solar:.1f} kW", delta=f"依據 {cloud}% 雲量計算")
+    # 【全面客製化】捨棄 st.metric，自刻 HTML Grid 網格系統，把數據塞得滿滿的！
+    st.markdown(f"""
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 15px; height: 100%; align-content: center;">
+            <div>
+                <div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區氣溫</div>
+                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{temp} <span style="font-size: 20px; color: #555;">°C</span></div>
+                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 即時微氣候觀測</div>
+            </div>
+            <div>
+                <div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區雲量</div>
+                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{cloud} <span style="font-size: 20px; color: #555;">%</span></div>
+                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 決定今日效率</div>
+            </div>
+            <div>
+                <div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日預測最高溫 (防禦基準)</div>
+                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{tmr_temp} <span style="font-size: 20px; color: #555;">°C</span></div>
+                <div style="display: inline-block; background: #ffeaea; color: #dc3545; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {tmr_temp-25:.1f} °C (高溫熱負荷)</div>
+            </div>
+            <div>
+                <div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日太陽能發電估值</div>
+                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{est_solar:.1f} <span style="font-size: 20px; color: #555;">kW</span></div>
+                <div style="display: inline-block; background: #e6f4ea; color: #28a745; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 依據 {cloud}% 雲量計算</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
 action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
