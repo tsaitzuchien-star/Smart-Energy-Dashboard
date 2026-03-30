@@ -9,13 +9,23 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.14", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.15", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
-    .ice-card { background-color: white; padding: 40px 20px; border-radius: 15px; text-align: center; box-shadow: 2px 2px 10px rgba(0,0,0,0.05); }
-    .ice-value { font-size: 75px; font-weight: 900; color: #1f77b4; line-height: 1.1; }
-    .ice-unit { font-size: 24px; color: #555; font-weight: bold; }
+    .ice-card { 
+        background-color: white; 
+        padding: 60px 20px; 
+        border-radius: 15px; 
+        text-align: center; 
+        box-shadow: 2px 2px 10px rgba(0,0,0,0.05); 
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .ice-value { font-size: 85px; font-weight: 900; color: #1f77b4; line-height: 1.1; }
+    .ice-unit { font-size: 28px; color: #555; font-weight: bold; }
     .action-call { background-color: #1E3A8A; color: white; padding: 15px; border-radius: 10px; font-size: 24px; font-weight: bold; text-align: center; margin-top: 15px; }
     .schedule-box { padding: 20px; border-radius: 10px; border: 2px dashed #4682B4; background-color: #F0F8FF; font-size: 20px;}
     .schedule-time { font-size: 32px; font-weight: bold; color: #D2691E; }
@@ -120,17 +130,17 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.14")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.15")
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
-# 【全新排版：左邊大框 1 等分，右邊 4 數據 2 等分】
-c_action, c_metrics = st.columns([1, 2])
+# 【排版優化】調整左右比例為 1.2 : 1，把左邊框框放大，逼迫右邊的數據集中
+c_action, c_metrics = st.columns([1.2, 1])
 
 with c_action:
     border_color = "#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 4 else "#dc3545"
     st.markdown(f"""
         <div class="ice-card" style="border: 4px solid {border_color};">
-            <div style="font-size: 20px; color: #666; font-weight: bold; margin-bottom: 10px;">建議今晚儲冰時間</div>
+            <div style="font-size: 24px; color: #666; font-weight: bold; margin-bottom: 10px;">建議今晚儲冰時間</div>
             <div>
                 <span class="ice-value">{suggested_ice_hrs:.1f}</span>
                 <span class="ice-unit">小時</span>
@@ -139,21 +149,18 @@ with c_action:
         """, unsafe_allow_html=True)
 
 with c_metrics:
-    # 第一排：目前觀測
+    # 把原本用來隔開上下的 margin 移除，讓四個數據更緊密
     row1_c1, row1_c2 = st.columns(2)
     with row1_c1:
         st.metric("目前園區氣溫", f"{temp} °C", delta="即時微氣候觀測", delta_color="off")
     with row1_c2:
-        st.metric("目前園區雲量", f"{cloud} %", delta="決定今日太陽能效率", delta_color="off")
+        st.metric("目前園區雲量", f"{cloud} %", delta="決定今日效率", delta_color="off")
     
-    st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True) # 增加一點上下排間距
-    
-    # 第二排：明日預測
     row2_c1, row2_c2 = st.columns(2)
     with row2_c1:
-        st.metric("明日預測最高溫 (防禦基準)", f"{tmr_temp} °C", delta=f"{tmr_temp-25:.1f} °C (高溫熱負荷啟動)", delta_color="inverse")
+        st.metric("明日預測最高溫 (防禦基準)", f"{tmr_temp} °C", delta=f"{tmr_temp-25:.1f} °C (高溫熱負荷)", delta_color="inverse")
     with row2_c2:
-        st.metric("明日太陽能發電估值", f"{est_solar:.1f} kW", delta=f"依據 {cloud}% 雲量計算 (保底值)")
+        st.metric("明日太陽能發電估值", f"{est_solar:.1f} kW", delta=f"依據 {cloud}% 雲量計算")
 
 action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
