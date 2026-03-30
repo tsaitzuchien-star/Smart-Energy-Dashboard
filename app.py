@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.10", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.11", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -62,7 +62,6 @@ def get_dual_weather():
     
     try:
         lat, lon = "23.936537", "120.697917"
-        # 【V2.10 更新】API 網址加入 relative_humidity_2m 抓取濕度
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,cloud_cover,weather_code&hourly=temperature_2m,cloud_cover,weather_code&timezone=Asia%2FTaipei"
         r = requests.get(om_url, timeout=5).json()
         res_dict["owm"] = {
@@ -70,7 +69,7 @@ def get_dual_weather():
             "wx": wmo_to_text(r['current']['weather_code']), 
             "cloud": r['current']['cloud_cover'], 
             "temp": r['current']['temperature_2m'], 
-            "humidity": r['current']['relative_humidity_2m'], # 新增濕度
+            "humidity": r['current']['relative_humidity_2m'],
             "hourly": {}
         }
         
@@ -101,7 +100,6 @@ def get_dual_weather():
 w = get_dual_weather()
 sel = w["owm"] if "國際" in primary_brain and w["owm"]["status"] == "🟢" else w["cwa"]
 
-# 判斷是否為手動展示模式
 if use_manual:
     cloud, temp, tmr_temp, humidity = manual_cloud, manual_temp, manual_temp, 60
 else:
@@ -124,15 +122,16 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.10")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.11")
 
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
-col_main, col_info = st.columns([2, 1])
+# 【排版優化】稍微調整左右欄比例，給右側更多空間放並排數據
+col_main, col_info = st.columns([1.2, 1])
 
 with col_main:
     border_color = "#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 4 else "#dc3545"
     st.markdown(f"""
-        <div style="background-color: white; padding: 40px; border-radius: 20px; border: 5px solid {border_color}; text-align: center; box-shadow: 10px 10px 20px rgba(0,0,0,0.1);">
+        <div style="background-color: white; padding: 40px; border-radius: 20px; border: 5px solid {border_color}; text-align: center; box-shadow: 10px 10px 20px rgba(0,0,0,0.1); height: 100%;">
             <p style="font-size: 30px; margin-bottom: 0px; color: #666;">建議今晚儲冰時間</p>
             <span class="ice-value">{suggested_ice_hrs:.1f}</span>
             <span class="ice-unit"> 小時</span>
@@ -140,7 +139,6 @@ with col_main:
         """, unsafe_allow_html=True)
 
 with col_info:
-    # 【V2.10 新增】即時觀測精緻面板
     st.markdown(f"""
         <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; border-left: 5px solid #17a2b8; margin-bottom: 20px;">
             <div style="font-size: 14px; color: #666; margin-bottom: 5px;">📍 目前園區即時觀測</div>
@@ -150,8 +148,12 @@ with col_info:
         </div>
     """, unsafe_allow_html=True)
 
-    st.metric("明日預測最高溫 (防禦基準)", f"{tmr_temp} °C", delta=f"{tmr_temp-25:.1f} °C (高溫熱負荷啟動)", delta_color="inverse")
-    st.metric("明日太陽能發電估值", f"{est_solar:.1f} kW", delta=f"依據 {cloud}% 雲量計算 (保底值)")
+    # 【排版優化】將兩個數據包裝在子欄位中，達成完美平齊
+    sub_c1, sub_c2 = st.columns(2)
+    with sub_c1:
+        st.metric("明日預測最高溫 (防禦基準)", f"{tmr_temp} °C", delta=f"{tmr_temp-25:.1f} °C (高溫熱負荷)", delta_color="inverse")
+    with sub_c2:
+        st.metric("明日太陽能發電估值", f"{est_solar:.1f} kW", delta=f"依據 {cloud}% 雲量計算")
 
 action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
