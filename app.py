@@ -6,25 +6,45 @@ from datetime import datetime, timedelta
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.4", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.6", page_icon="❄️", layout="wide")
+
+# 自定義 CSS
+st.markdown("""
+    <style>
+    .ice-card {
+        background-color: #f0f2f6;
+        padding: 30px;
+        border-radius: 15px;
+        border-left: 10px solid #007bff;
+        text-align: center;
+    }
+    .ice-value {
+        font-size: 80px !important;
+        font-weight: 800;
+        color: #1f77b4;
+        line-height: 1;
+    }
+    .ice-unit {
+        font-size: 30px;
+        color: #555;
+    }
+    .action-call {
+        background-color: #1E3A8A;
+        color: white;
+        padding: 15px;
+        border-radius: 10px;
+        font-size: 24px;
+        font-weight: bold;
+        text-align: center;
+        margin-top: 20px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ 系統控制")
-    if st.button("🔄 重新連線雙氣象源", type="primary", use_container_width=True):
-        st.cache_data.clear()
-    st.markdown("---")
+    st.header("⚙️ 系統與營運參數")
+    primary_brain = st.radio("大腦決策來源", ["🇩🇪 國際開源氣象 (園區座標)", "🇹🇼 台灣氣象署 (南投縣)"])
     
-    st.header("🧠 決策大腦優先權")
-    primary_brain = st.radio(
-        "選擇主要氣象來源",
-        ["🇩🇪 國際開源氣象 (園區精確座標)", "🇹🇼 台灣氣象署 (南投縣大範圍)"],
-        label_visibility="collapsed"
-    )
-    
-    st.markdown("---")
-    st.header("🏢 營運動態參數")
-    attendance_rate = st.slider("預估人員出勤率 (%)", 50, 100, 80) / 100.0
-
     st.markdown("---")
     st.header("☁️ 現場即時校正")
     cloud_emergency = st.toggle("🔴 啟動【突發雲湧】防禦模式", value=False)
@@ -33,28 +53,18 @@ with st.sidebar:
     st.header("🕹️ 展示模式")
     use_manual = st.checkbox("✅ 啟用模擬拉桿", value=False)
     manual_cloud = st.slider("模擬雲量 (%)", 0, 100, 20, disabled=not use_manual)
-    manual_temp = st.slider("模擬外部氣溫 (°C)", 15, 40, 28, disabled=not use_manual)
+    manual_temp = st.slider("模擬氣溫 (°C)", 15, 40, 28, disabled=not use_manual)
 
-# --- 2. 硬體、歷史與台電參數 ---
-SOLAR_MAX_KW = 146.0
-MAG_MAX_KW = 141.8
+# --- 2. 參數與台電規則 ---
+SOLAR_MAX_KW, MAG_MAX_KW = 146.0, 141.8
 current_month = datetime.now().month
+CONTRACT_LIMIT, season_tag = (452.0, "夏月") if 6 <= current_month <= 9 else (516.0, "非夏月")
 
-# 【V2.4 核心升級】台電夏月/非夏月契約容量自動切換
-if 6 <= current_month <= 9:
-    CONTRACT_LIMIT = 452.0
-    season_tag = "夏月"
-else:
-    CONTRACT_LIMIT = 516.0
-    season_tag = "非夏月"
-
-# 歷史最高需量基準
 historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530, 8: 504, 9: 428, 10: 460, 11: 500, 12: 394}
 base_load_historical = historical_max_demand.get(current_month, 400)
 
-# 擴編滿載增加 70kW，乘上出勤率打折
-MAX_BASE_LOAD_GROWTH = 70.0 
-actual_load_growth = MAX_BASE_LOAD_GROWTH * attendance_rate
+# 【V2.6 修正】老闆指示：先不打折，直接以 70kW 滿載計算最終預測負載
+actual_load_growth = 70.0 
 
 # 國際氣象碼轉譯函數
 def wmo_to_text(wmo):
@@ -66,163 +76,141 @@ def wmo_to_text(wmo):
     elif wmo >= 95: return "雷陣雨"
     return "未知"
 
-# --- 3. 雙氣象源深度抓取 (含外氣溫度) ---
+# --- 3. 氣象抓取 ---
 @st.cache_data(ttl=300)
 def get_dual_weather():
-    results = {
-        "cwa": {"status": "🔴 連線失敗", "wx": "未知", "cloud": 0, "pop": 0, "temp": 25.0, "update": "N/A", "tmr_wx": "未知", "tmr_cloud": 0, "tmr_temp": 25.0},
-        "owm": {"status": "🔴 連線失敗", "wx": "未知", "cloud": 0, "pop": 0, "temp": 25.0, "update": "N/A", "tmr_wx": "未知", "tmr_cloud": 0, "tmr_temp": 25.0}
-    }
+    res_dict = {"cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0},
+                "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0, "hourly": {}}}
     
-    # A. 台灣氣象署 (CWA)
-    try:
-        cwa_api = "CWA-3DD5DB13-517F-4C53-8A1C-0D2FB1595975"
-        cwa_url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization={cwa_api}&locationName=南投縣"
-        res = requests.get(cwa_url, verify=False, timeout=8)
-        if res.status_code == 200:
-            data = res.json()
-            locs = data.get('records', {}).get('location', [])
-            if locs:
-                elements = locs[0].get('weatherElement', [])
-                for e in elements:
-                    name = e.get('elementName')
-                    times = e.get('time', [])
-                    val_now = times[0].get('parameter', {}).get('parameterName', '').strip()
-                    
-                    if name == 'Wx': results['cwa']['wx'] = val_now
-                    elif name == 'PoP': results['cwa']['pop'] = int(val_now) if val_now.isdigit() else 0
-                    elif name == 'MaxT': results['cwa']['temp'] = float(val_now) if val_now.isdigit() else 25.0
-                    
-                    tomorrow_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-                    for t in times:
-                        if tomorrow_date in t.get('startTime', '') and "06:00" in t.get('startTime', ''):
-                            v = t.get('parameter', {}).get('parameterName', '').strip()
-                            if name == 'Wx': results['cwa']['tmr_wx'] = v
-                            elif name == 'MaxT': results['cwa']['tmr_temp'] = float(v) if v.isdigit() else 25.0
-
-                def wx_to_cloud(wx_str):
-                    if "晴" in wx_str and "雲" not in wx_str: return 10
-                    elif "多雲" in wx_str and "晴" in wx_str: return 30
-                    elif "多雲" in wx_str: return 60
-                    elif "陰" in wx_str: return 85
-                    return 50
-                
-                results['cwa']['cloud'] = wx_to_cloud(results['cwa']['wx'])
-                results['cwa']['tmr_cloud'] = wx_to_cloud(results['cwa']['tmr_wx'])
-                results['cwa']['update'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                results['cwa']['status'] = "🟢 正常連線"
-    except Exception:
-        pass
-
-    # B. 德國 Open-Meteo
+    tmr_prefix = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # 德國 Open-Meteo (國際站 - 高解析度)
     try:
         lat, lon = "23.936537", "120.697917"
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,weather_code&hourly=temperature_2m,cloud_cover,weather_code&timezone=Asia%2FTaipei"
-        res = requests.get(om_url, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            results['owm']['cloud'] = data['current']['cloud_cover']
-            results['owm']['temp'] = data['current']['temperature_2m']
-            results['owm']['wx'] = wmo_to_text(data['current']['weather_code'])
+        r = requests.get(om_url, timeout=5).json()
+        
+        res_dict["owm"] = {
+            "status": "🟢", 
+            "wx": wmo_to_text(r['current']['weather_code']), 
+            "cloud": r['current']['cloud_cover'], 
+            "temp": r['current']['temperature_2m'],
+            "hourly": {}
+        }
+        
+        # 抓取老闆指定的 5 個黃金時段
+        target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
+        times_list = r['hourly']['time']
+        
+        for hour in target_hours:
+            t_str = f"{tmr_prefix}T{hour}"
+            if t_str in times_list:
+                idx = times_list.index(t_str)
+                res_dict["owm"]["hourly"][hour] = {
+                    "temp": r['hourly']['temperature_2m'][idx],
+                    "cloud": r['hourly']['cloud_cover'][idx],
+                    "wx": wmo_to_text(r['hourly']['weather_code'][idx])
+                }
+        
+        # 明日最高溫代表 (取 12:00 到 15:00 的最大值)
+        try:
+            tmr_temps = [r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)]
+            res_dict["owm"]["tmr_temp"] = max(tmr_temps)
+        except:
+            res_dict["owm"]["tmr_temp"] = res_dict["owm"]["hourly"].get("12:00", {}).get("temp", 28.0)
             
-            tmr_prefix = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-            try:
-                times = data['hourly']['time']
-                idx_12 = times.index(f"{tmr_prefix}T12:00")
-                results['owm']['tmr_cloud'] = data['hourly']['cloud_cover'][idx_12]
-                results['owm']['tmr_temp'] = data['hourly']['temperature_2m'][idx_12]
-                results['owm']['tmr_wx'] = wmo_to_text(data['hourly']['weather_code'][idx_12])
-            except Exception:
-                pass
-                
-            results['owm']['update'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            results['owm']['status'] = "🟢 正常連線"
-    except Exception:
+    except Exception as e: 
         pass
+    
+    # 台灣氣象署 (CWA)
+    try:
+        cwa_url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization=CWA-3DD5DB13-517F-4C53-8A1C-0D2FB1595975&locationName=南投縣"
+        r = requests.get(cwa_url, verify=False, timeout=5).json()
+        wx = r['records']['location'][0]['weatherElement'][0]['time'][0]['parameter']['parameterName']
+        res_dict["cwa"] = {"status": "🟢", "wx": wx, "cloud": 30 if "晴" in wx else 70, "temp": 25.0, "tmr_temp": 28.0}
+    except: 
+        pass
+        
+    return res_dict
 
-    return results
+w = get_dual_weather()
 
-w_data = get_dual_weather()
-
-# --- 決策大腦切換邏輯 ---
-if use_manual:
-    wx, cloud_cover, current_temp, source_tag = "模擬天氣", manual_cloud, manual_temp, "🕹️ 展示模式"
-    tmr_wx, tmr_cloud, tmr_temp = "模擬明日", manual_cloud, manual_temp
-elif cloud_emergency:
-    wx, cloud_cover, current_temp, source_tag = "突發雲湧", 85, 30.0, "🚨 人工防禦模式"
-    tmr_wx, tmr_cloud, tmr_temp = "突發雲湧延續", 85, 30.0
-else:
-    if "國際" in primary_brain and "🟢" in w_data['owm']['status']:
-        wx, cloud_cover, current_temp = w_data['owm']['wx'], w_data['owm']['cloud'], w_data['owm']['temp']
-        tmr_wx, tmr_cloud, tmr_temp = w_data['owm']['tmr_wx'], w_data['owm']['tmr_cloud'], w_data['owm']['tmr_temp']
-        source_tag = "🎯 德國開源氣象 (鎖定中創園區精確座標)"
-    elif "台灣" in primary_brain and "🟢" in w_data['cwa']['status']:
-        wx, cloud_cover, current_temp = w_data['cwa']['wx'], w_data['cwa']['cloud'], w_data['cwa']['temp']
-        tmr_wx, tmr_cloud, tmr_temp = w_data['cwa']['tmr_wx'], w_data['cwa']['tmr_cloud'], w_data['cwa']['tmr_temp']
-        source_tag = "✅ 台灣氣象署 (南投縣大範圍預報)"
-    else:
-        wx, cloud_cover, current_temp, source_tag = "多雲", 60, 25.0, "🛡️ 離線防禦模式"
-        tmr_wx, tmr_cloud, tmr_temp = "多雲", 60, 25.0
+# 決策選擇
+sel = w["owm"] if "國際" in primary_brain and w["owm"]["status"] == "🟢" else w["cwa"]
+cloud, temp, tmr_temp = (manual_cloud, manual_temp, manual_temp) if use_manual else (sel["cloud"], sel["temp"], sel["tmr_temp"])
 
 # --- 4. 大腦運算 ---
-TEMP_PENALTY_KW_PER_DEGREE = 5.5
-temp_penalty_kw = max(0, (tmr_temp - 25.0) * TEMP_PENALTY_KW_PER_DEGREE)
-final_predicted_demand = base_load_historical + actual_load_growth + temp_penalty_kw
+temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
 
-solar_eff = 0.95 if cloud_cover < 15 else 0.60 if cloud_cover < 40 else 0.30 if cloud_cover < 75 else 0.15
-est_solar_kw = SOLAR_MAX_KW * solar_eff
+# 終極預測負載：歷史基準 + 擴編 70kW(滿載) + 明日高溫熱負荷
+final_predicted_demand = base_load_historical + actual_load_growth + temp_penalty
 
-# 安全餘裕動態計算
-safe_margin_kw = CONTRACT_LIMIT - final_predicted_demand + est_solar_kw
-usable_mag_kw = max(0, min(MAG_MAX_KW, safe_margin_kw))
+solar_eff = 0.95 if cloud < 15 else 0.60 if cloud < 40 else 0.30 if cloud < 75 else 0.15
+est_solar = SOLAR_MAX_KW * solar_eff
 
-suggested_ice_hrs = max(1.5, min(9.0, ((2500 - (usable_mag_kw / MAG_MAX_KW * 240 * 9)) * 1.2 / 2500 * 9)))
+safe_margin = CONTRACT_LIMIT - final_predicted_demand + est_solar
+usable_mag = max(0, min(MAG_MAX_KW, safe_margin))
+suggested_ice_hrs = max(1.5, min(9.0, ((2500 - (usable_mag / MAG_MAX_KW * 240 * 9)) * 1.2 / 2500 * 9)))
 
 # --- 5. 渲染 UI ---
-st.title("🏆 中創園區空調聯防戰情室 V2.4")
-st.info(f"🧠 **目前大腦決策基準：** {source_tag}")
+st.title("❄️ 中創園區空調聯防：同仁行動戰情室 V2.6")
 
-st.subheader("🌐 雙核心氣象與外氣溫度監測")
-c1, c2 = st.columns(2)
+# 重點區：建議儲冰時間
+st.markdown("### 🔔 空調同仁核心指令 (今晚任務)")
+col_main, col_info = st.columns([2, 1])
 
-with c1:
-    st.markdown("### 🇹🇼 台灣氣象署 (CWA)")
-    if "🟢" in w_data['cwa']['status']: st.success(w_data['cwa']['status'])
-    else: st.error(w_data['cwa']['status'])
-    c1_a, c1_b, c1_c = st.columns(3)
-    c1_a.metric("即時天氣", w_data['cwa']['wx'])
-    c1_b.metric("智能雲量", f"{w_data['cwa']['cloud']} %")
-    c1_c.metric("外部氣溫", f"{w_data['cwa']['temp']} °C")
+with col_main:
+    border_color = "#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 4 else "#dc3545"
+    st.markdown(f"""
+        <div style="background-color: white; padding: 40px; border-radius: 20px; border: 5px solid {border_color}; text-align: center; box-shadow: 10px 10px 20px rgba(0,0,0,0.1);">
+            <p style="font-size: 30px; margin-bottom: 0px; color: #666;">建議今晚儲冰時間</p>
+            <span class="ice-value">{suggested_ice_hrs:.1f}</span>
+            <span class="ice-unit"> 小時</span>
+        </div>
+        """, unsafe_allow_html=True)
 
-with c2:
-    st.markdown("### 🇩🇪 德國衛星氣象 (Open-Meteo)")
-    if "🟢" in w_data['owm']['status']: st.success(w_data['owm']['status'])
-    else: st.error(w_data['owm']['status'])
-    c2_a, c2_b, c2_c = st.columns(3)
-    c2_a.metric("即時天氣", w_data['owm']['wx'])
-    c2_b.metric("衛星雲量", f"{w_data['owm']['cloud']} %")
-    c2_c.metric("精確氣溫", f"{w_data['owm']['temp']} °C")
+with col_info:
+    st.metric("明日預測最高溫 (防禦基準)", f"{tmr_temp} °C", delta=f"{tmr_temp-25:.1f} °C (高溫熱負荷啟動)", delta_color="inverse")
+    st.metric("明日太陽能發電估值", f"{est_solar:.1f} kW", delta=f"依據 {cloud}% 雲量計算 (保底值)")
 
-st.markdown("---")
-st.subheader("🔥 負載動態補償大腦 (精算版)")
-cc1, cc2, cc3, cc4 = st.columns(4)
-cc1.metric("歷史基礎負載", f"{base_load_historical} kW")
-
-discount_text = f"{attendance_rate * 10:g}"
-cc2.metric("📈 擴編動態加載", f"+{actual_load_growth:.1f} kW", f"依新增人數打 {discount_text} 折", delta_color="inverse")
-cc3.metric("🌡️ 外氣溫度補償", f"+{temp_penalty_kw:.1f} kW", f"明日預估 {tmr_temp}°C", delta_color="inverse")
-cc4.metric("最終預測負載", f"{final_predicted_demand:.1f} kW")
+action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
+st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
 
 st.markdown("---")
-st.subheader("⚡ 聯防大腦決策與今晚儲冰建議")
-ca, cb, cc = st.columns(3)
-ca.metric("明日太陽能發電估值", f"{est_solar_kw:.1f} kW", delta=f"依據 {tmr_cloud}% 雲量計算")
 
-# 顯示自動判定的台電季節警戒線
-cb.metric("系統安全餘裕電力", f"{safe_margin_kw:.1f} kW", delta=f"↑ {season_tag}警戒線: {CONTRACT_LIMIT} kW", delta_color="off")
-cc.metric("建議今晚儲冰時間", f"{suggested_ice_hrs:.1f} 小時")
+# 【V2.6 新增】老闆專屬：明日關鍵時段預報追蹤
+st.subheader("🎯 明日關鍵時段預報追蹤 (觀測驗證區)")
+st.caption("以下數據由「🇩🇪 德國衛星高解析度微氣候模型」提供，精確鎖定園區 GPS 座標。方便明早進行預報準確度驗證。")
 
-if safe_margin_kw < MAG_MAX_KW:
-    st.error(f"🚨 警告：逼近{season_tag}契約極限！預測電力餘裕嚴重不足，請務必拉滿儲冰時數！")
+if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
+    h_cols = st.columns(5)
+    target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
+    for i, h in enumerate(target_hours):
+        with h_cols[i]:
+            st.markdown(f"**⏰ {h}**")
+            if h in w["owm"]["hourly"]:
+                h_data = w["owm"]["hourly"][h]
+                st.write(f"🌤️ {h_data['wx']}")
+                st.write(f"🌡️ **{h_data['temp']} °C**")
+                
+                # 雲量進度條 (視覺化)
+                c_val = h_data['cloud']
+                st.progress(c_val / 100, text=f"☁️ 雲量 {c_val}%")
+            else:
+                st.write("資料擷取中...")
 else:
-    st.info("🟢 餘裕充足，明日白天可優先利用太陽能直供磁浮主機。")
+    st.warning("目前國際衛星資料連線中斷，無法顯示逐小時預報。")
+
+st.markdown("---")
+
+# 次要資訊：負載拆解
+st.subheader("📊 決策基礎數據分析")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("歷史基礎負載", f"{base_load_historical:.1f} kW")
+# 明確標示不打折
+c2.metric("📈 擴編動態加載", f"+{actual_load_growth:.1f} kW", "全勤滿載計算 (最壞劇本防禦)", delta_color="inverse")
+c3.metric("溫度加載負載", f"+{temp_penalty:.1f} kW")
+c4.metric("契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
+
+# 底部狀態小燈
+st.markdown(f"系統運行中 | 資料更新：{datetime.now().strftime('%H:%M:%S')} | 座標鎖定：23.9365, 120.6979")
