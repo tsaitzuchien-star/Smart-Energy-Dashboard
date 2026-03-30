@@ -107,10 +107,11 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：同仁行動戰情室 V2.8")
+# 【客製化 1】抬頭修改
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.8")
 
-# 重點區：建議儲冰時間
-st.markdown("### 🔔 空調同仁核心指令 (今晚任務)")
+# 【客製化 2】核心指令修改
+st.markdown("### 🔔 健維-空調核心指令 (今晚任務)")
 col_main, col_info = st.columns([2, 1])
 
 with col_main:
@@ -130,9 +131,9 @@ with col_info:
 action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
 
-# 中央監控 (BMS) 排程設定面板
+# 【客製化 3】中央監控系統標題修改
 st.markdown("<br>", unsafe_allow_html=True)
-st.markdown("### 📝 中央監控系統 (BMS) 排程設定建議")
+st.markdown("### 📝 中央監控系統 (儲融冰) 排程設定建議")
 sc1, sc2 = st.columns(2)
 with sc1:
     st.markdown(f"""
@@ -154,7 +155,8 @@ with sc2:
     """, unsafe_allow_html=True)
 
 st.markdown("---")
-st.subheader("🎯 明日關鍵時段預報追蹤 (觀測驗證區)")
+# 【客製化 4】明日關鍵時段標題修改
+st.subheader("🎯 明日關鍵時段預報追蹤")
 if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
     h_cols = st.columns(5)
     target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
@@ -170,7 +172,6 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
 
 st.markdown("---")
 
-# 【V2.8 新增】5欄位設計：加入最終預測負載
 st.subheader("📊 決策基礎數據分析")
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("歷史基礎負載", f"{base_load_historical:.1f} kW")
