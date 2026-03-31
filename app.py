@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.20", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.21", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -44,11 +44,18 @@ with st.sidebar:
 
 # --- 2. 參數與台電規則 ---
 SOLAR_MAX_KW, MAG_MAX_KW = 146.0, 141.8
-current_month = datetime.now(TW_TZ).month
+now_dt = datetime.now(TW_TZ)
+current_month = now_dt.month
 CONTRACT_LIMIT, season_tag = (452.0, "夏月") if 6 <= current_month <= 9 else (516.0, "非夏月")
 
 historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530, 8: 504, 9: 428, 10: 460, 11: 500, 12: 394}
 base_load_historical = historical_max_demand.get(current_month, 400)
+
+# 【V2.21 重要修正】去年 1-5 月無磁浮全靠融冰，基準值已被壓縮。
+# 補回去年融冰平均擋掉的需量（補償因子），建議設定為 60kW (可依現場融冰閥開度經驗調整)
+ice_restoration_kw = 60.0 if 1 <= current_month <= 5 else 0.0
+true_base_load = base_load_historical + ice_restoration_kw
+
 actual_load_growth = 70.0  
 
 def wmo_to_text(wmo):
@@ -114,11 +121,11 @@ cloud, temp, tmr_temp = sel["cloud"], sel["temp"], sel["tmr_temp"]
 
 with st.sidebar:
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
-    st.caption("系統預設每 5 分鐘自動更新一次。")
+    st.caption("系統預設每 5 分鐘自動更新一次。若需立即獲取衛星最新數值，請點擊上方按鈕。")
 
 # --- 4. 大腦運算 ---
 temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
-final_predicted_demand = base_load_historical + actual_load_growth + temp_penalty
+final_predicted_demand = true_base_load + actual_load_growth + temp_penalty
 solar_eff = 0.95 if cloud < 15 else 0.60 if cloud < 40 else 0.30 if cloud < 75 else 0.15
 est_solar = SOLAR_MAX_KW * solar_eff
 safe_margin = CONTRACT_LIMIT - final_predicted_demand + est_solar
@@ -132,7 +139,7 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.20")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.21")
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
@@ -216,13 +223,13 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
             else: st.write("資料擷取中...")
 
 st.markdown("---")
-# 【V2.20 防呆正名】明確加上「明日」字眼
-st.subheader("📊 明日負載預測與決策基礎")
+st.subheader("📊 明日負載預測與決策基礎 (含歷史融冰補償)")
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("歷史基礎負載", f"{base_load_historical:.1f} kW")
 c2.metric("📈 擴編動態加載", f"+{actual_load_growth:.1f} kW", "全勤滿載計算", delta_color="inverse")
 c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW")
-c4.metric("🔥 明日最終預測負載", f"{final_predicted_demand:.1f} kW", "總和預估", delta_color="off")
+# 新增補償說明欄位
+c4.metric("🔥 明日最終預測負載", f"{final_predicted_demand:.1f} kW", f"含 {ice_restoration_kw}kW 融冰還原", delta_color="off")
 c5.metric("⚡ 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
 st.markdown(f"系統運行中 | 氣象大腦同步時間：{w['fetch_time']} | 座標鎖定：23.9365, 120.6979")
