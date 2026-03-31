@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.26", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.27", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -141,7 +141,7 @@ start_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
 end_time_str = "07:00"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.26")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.27")
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
@@ -155,14 +155,16 @@ with c_metrics:
 action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
 
-st.markdown("<br>### 📝 中央監控系統 (儲融冰) 排程設定建議", unsafe_allow_html=True)
+# 【V2.27 修正】換成標準 subheader，字體完美一致且不會有 ### 跑出來
+st.markdown("<br>", unsafe_allow_html=True)
+st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
+
 sc1, sc2 = st.columns(2)
 with sc1:
     st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間製冰排程 (Ice Storage)</b><br><br>啟動：<span class="schedule-time">{start_time_str}</span><br>停止：<span class="schedule-time">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">*已優化截止時間，減少儲槽待機損耗。</span></div>""", unsafe_allow_html=True)
 with sc2:
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程 (Ice Melting)</b><br><br>啟動：<span class="schedule-time">10:00</span><br>停止：<span class="schedule-time">16:00</span><br><br><span style="font-size:16px; color:#666;">*依 IB-1 設計 13°C 進水條件執行。</span></div>""", unsafe_allow_html=True)
 
-# 【V2.26 修正】把不小心刪掉的預報區塊補回來啦！
 st.markdown("---")
 st.subheader("🎯 明日關鍵時段預報追蹤")
 if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
