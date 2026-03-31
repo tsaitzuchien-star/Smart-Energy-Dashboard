@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.25", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.26", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -134,7 +134,6 @@ else:
 
 suggested_ice_hrs = max(1.5, min(9.0, suggested_ice_hrs))
 
-# 【07:00 截止設定】
 end_minutes = 7 * 60 
 start_minutes = int(end_minutes - (suggested_ice_hrs * 60))
 if start_minutes < 0: start_minutes += 24 * 60
@@ -142,78 +141,42 @@ start_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
 end_time_str = "07:00"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.25")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.26")
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
-
-# 解壓縮：左側儲冰時間面板
 with c_action:
     border_color = "#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 4 else "#dc3545"
-    st.markdown(f"""
-        <div class="ice-card" style="border: 4px solid {border_color};">
-            <div style="font-size: 24px; color: #666; font-weight: bold; margin-bottom: 10px;">建議今晚儲冰時間</div>
-            <div>
-                <span class="ice-value">{suggested_ice_hrs:.1f}</span>
-                <span class="ice-unit">小時</span>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="ice-card" style="border: 4px solid {border_color};"><div style="font-size: 24px; color: #666; font-weight: bold; margin-bottom: 10px;">建議今晚儲冰時間</div><div><span class="ice-value">{suggested_ice_hrs:.1f}</span><span class="ice-unit">小時</span></div></div>""", unsafe_allow_html=True)
 
-# 解壓縮：右側四宮格數據面板
 with c_metrics:
-    st.markdown(f"""
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 15px; height: 100%; align-content: center;">
-            <div>
-                <div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區氣溫</div>
-                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{temp} <span style="font-size: 20px; color: #555;">°C</span></div>
-                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 即時微氣候觀測</div>
-            </div>
-            <div>
-                <div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區雲量</div>
-                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{cloud} <span style="font-size: 20px; color: #555;">%</span></div>
-                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 影響現在發電</div>
-            </div>
-            <div>
-                <div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日預測最高溫 (防禦基準)</div>
-                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{tmr_temp} <span style="font-size: 20px; color: #555;">°C</span></div>
-                <div style="display: inline-block; background: #ffeaea; color: #dc3545; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {tmr_temp-25:.1f} °C (高溫熱負荷)</div>
-            </div>
-            <div>
-                <div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日太陽能發電估值</div>
-                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{est_solar:.1f} <span style="font-size: 20px; color: #555;">kW</span></div>
-                <div style="display: inline-block; background: #e6f4ea; color: #28a745; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 依據明日 {tmr_cloud}% 雲量計算</div>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 15px; height: 100%; align-content: center;"><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區氣溫</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 即時微氣候觀測</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區雲量</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{cloud} <span style="font-size: 20px; color: #555;">%</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 影響現在發電</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日預測最高溫 (防禦基準)</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{tmr_temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #ffeaea; color: #dc3545; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {tmr_temp-25:.1f} °C (高溫熱負荷)</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日太陽能發電估值</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{est_solar:.1f} <span style="font-size: 20px; color: #555;">kW</span></div><div style="display: inline-block; background: #e6f4ea; color: #28a745; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 依據明日 {tmr_cloud}% 雲量計算</div></div></div>""", unsafe_allow_html=True)
 
 action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
 
 st.markdown("<br>### 📝 中央監控系統 (儲融冰) 排程設定建議", unsafe_allow_html=True)
 sc1, sc2 = st.columns(2)
-
-# 解壓縮：製冰排程框
 with sc1:
-    st.markdown(f"""
-        <div class="schedule-box">
-            <b>❄️ 夜間製冰排程 (Ice Storage)</b><br><br>
-            啟動：<span class="schedule-time">{start_time_str}</span><br>
-            停止：<span class="schedule-time">{end_time_str}</span><br><br>
-            <span style="font-size:16px; color:#666;">*已優化截止時間，減少儲槽待機損耗。</span>
-        </div>
-    """, unsafe_allow_html=True)
-
-# 解壓縮：融冰排程框
+    st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間製冰排程 (Ice Storage)</b><br><br>啟動：<span class="schedule-time">{start_time_str}</span><br>停止：<span class="schedule-time">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">*已優化截止時間，減少儲槽待機損耗。</span></div>""", unsafe_allow_html=True)
 with sc2:
-    st.markdown(f"""
-        <div class="schedule-box">
-            <b>💧 日間融冰排程 (Ice Melting)</b><br><br>
-            啟動：<span class="schedule-time">10:00</span><br>
-            停止：<span class="schedule-time">16:00</span><br><br>
-            <span style="font-size:16px; color:#666;">*依 IB-1 設計 13°C 進水條件執行。</span>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程 (Ice Melting)</b><br><br>啟動：<span class="schedule-time">10:00</span><br>停止：<span class="schedule-time">16:00</span><br><br><span style="font-size:16px; color:#666;">*依 IB-1 設計 13°C 進水條件執行。</span></div>""", unsafe_allow_html=True)
+
+# 【V2.26 修正】把不小心刪掉的預報區塊補回來啦！
+st.markdown("---")
+st.subheader("🎯 明日關鍵時段預報追蹤")
+if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
+    h_cols = st.columns(5)
+    target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
+    for i, h in enumerate(target_hours):
+        with h_cols[i]:
+            st.markdown(f"**⏰ {h}**")
+            if h in w["owm"]["hourly"]:
+                h_data = w["owm"]["hourly"][h]
+                st.write(f"🌤️ {h_data['wx']}")
+                st.write(f"🌡️ **{h_data['temp']} °C**")
+                st.progress(h_data['cloud'] / 100, text=f"☁️ 雲量 {h_data['cloud']}%")
+            else: st.write("資料擷取中...")
 
 st.markdown("---")
 st.subheader("📊 明日負載預測與決策基礎")
@@ -224,4 +187,4 @@ c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW")
 c4.metric("🔥 明日最終預測負載", f"{final_predicted_demand:.1f} kW", f"含 {ice_restoration_kw}kW 融冰還原")
 c5.metric("⚡ 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
-st.markdown(f"系統運行中 | 氣象大腦同步時間：{w['fetch_time']} | 設備參數：BCU-1(螺旋式) & IB-1(2500RT-HR)")
+st.markdown(f"系統運行中 | 氣象大腦同步時間：{w['fetch_time']} | 設備參數：BCU-1(儲冰主機) & IB-1(2500RT-HR)")
