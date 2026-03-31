@@ -9,13 +9,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.16", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.19", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
     .ice-card { 
         background-color: white; 
-        padding: 40px 20px; /* 稍微縮小上下 padding，配合右邊緊湊排版 */
+        padding: 40px 20px; 
         border-radius: 15px; 
         text-align: center; 
         box-shadow: 2px 2px 10px rgba(0,0,0,0.05); 
@@ -35,14 +35,12 @@ st.markdown("""
 with st.sidebar:
     st.header("⚙️ 系統與營運參數")
     primary_brain = st.radio("大腦決策來源", ["🇩🇪 國際開源氣象 (園區座標)", "🇹🇼 台灣氣象署 (南投縣)"])
+    
     st.markdown("---")
-    st.header("☁️ 現場即時校正")
-    cloud_emergency = st.toggle("🔴 啟動【突發雲湧】防禦模式", value=False)
-    st.markdown("---")
-    st.header("🕹️ 展示模式")
-    use_manual = st.checkbox("✅ 啟用模擬拉桿", value=False)
-    manual_cloud = st.slider("模擬雲量 (%)", 0, 100, 20, disabled=not use_manual)
-    manual_temp = st.slider("模擬氣溫 (°C)", 15, 40, 28, disabled=not use_manual)
+    st.header("🔄 資料同步控制")
+    if st.button("🔄 強制同步最新氣象", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 # --- 2. 參數與台電規則 ---
 SOLAR_MAX_KW, MAG_MAX_KW = 146.0, 141.8
@@ -51,7 +49,7 @@ CONTRACT_LIMIT, season_tag = (452.0, "夏月") if 6 <= current_month <= 9 else (
 
 historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530, 8: 504, 9: 428, 10: 460, 11: 500, 12: 394}
 base_load_historical = historical_max_demand.get(current_month, 400)
-actual_load_growth = 70.0  # 全勤滿載防禦
+actual_load_growth = 70.0  
 
 def wmo_to_text(wmo):
     if wmo == 0: return "晴朗"
@@ -63,9 +61,13 @@ def wmo_to_text(wmo):
     return "未知"
 
 # --- 3. 氣象抓取 ---
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300) 
 def get_dual_weather():
-    res_dict = {"cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0},
+    # 【V2.19 新增】在抓取資料的瞬間，蓋上台灣時間的時間戳記
+    fetch_time = datetime.now(TW_TZ).strftime('%Y-%m-%d %H:%M:%S')
+    
+    res_dict = {"fetch_time": fetch_time,
+                "cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0},
                 "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0, "hourly": {}}}
     
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -109,10 +111,12 @@ def get_dual_weather():
 w = get_dual_weather()
 sel = w["owm"] if "國際" in primary_brain and w["owm"]["status"] == "🟢" else w["cwa"]
 
-if use_manual:
-    cloud, temp, tmr_temp = manual_cloud, manual_temp, manual_temp
-else:
-    cloud, temp, tmr_temp = sel["cloud"], sel["temp"], sel["tmr_temp"]
+cloud, temp, tmr_temp = sel["cloud"], sel["temp"], sel["tmr_temp"]
+
+# 將剛剛抓到的時間戳記顯示在側邊欄按鈕下方
+with st.sidebar:
+    st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
+    st.caption("系統預設每 5 分鐘自動更新一次。")
 
 # --- 4. 大腦運算 ---
 temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
@@ -130,8 +134,8 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.16")
-st.markdown("### 🔔 健維哥-(今晚儲冰任務)請於上班日17:00前完成排程設定")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.19")
+st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
 
@@ -148,7 +152,6 @@ with c_action:
         """, unsafe_allow_html=True)
 
 with c_metrics:
-    # 【全面客製化】捨棄 st.metric，自刻 HTML Grid 網格系統，把數據塞得滿滿的！
     st.markdown(f"""
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 15px; height: 100%; align-content: center;">
             <div>
@@ -223,4 +226,5 @@ c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW")
 c4.metric("🔥 最終預測負載", f"{final_predicted_demand:.1f} kW", "總和預估", delta_color="off")
 c5.metric("⚡ 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
-st.markdown(f"系統運行中 | 資料更新：{datetime.now(TW_TZ).strftime('%H:%M:%S')} | 座標鎖定：23.9365, 120.6979")
+# 狀態列也同步正名
+st.markdown(f"系統運行中 | 氣象大腦同步時間：{w['fetch_time']} | 座標鎖定：23.9365, 120.6979")
