@@ -10,10 +10,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.20", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.21", page_icon="❄️", layout="wide")
 
-# 【V2.20 核心功能】自動定時重新整理 (每 5 分鐘)
-# 利用 HTML Meta Refresh 技術，讓瀏覽器每 300 秒自動 rerun 程式
 st.markdown("""
     <meta http-equiv="refresh" content="300">
     <style>
@@ -38,14 +36,16 @@ st.markdown("""
 
 with st.sidebar:
     st.header("⚙️ 系統與營運參數")
-    primary_brain = st.radio("大腦決策來源", ["🇩🇪 國際開源氣象 (園區座標)", "🇹🇼 台灣氣象署 (南投縣)"])
+    
+    # 【V2.21 全新設計】直接宣告混血大腦模式
+    st.success("🧠 **混血大腦模式已啟動**\n\n📍 即時觀測：🇹🇼 台灣氣象署\n🔮 趨勢預測：🇩🇪 德國微氣候模型")
     
     st.markdown("---")
     st.header("🔄 資料同步控制")
     if st.button("🔄 立即強制同步 (手動)", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
-    st.info("💡 系統已啟動【自動巡航】，每 5 分鐘會自動與衛星同步數據。")
+    st.info("💡 系統已啟動【自動巡航】，每 5 分鐘會自動與雙氣象源同步數據。")
 
 # --- 2. 參數與台電規則 ---
 SOLAR_MAX_KW, MAG_MAX_KW = 146.0, 141.8
@@ -65,7 +65,7 @@ def wmo_to_text(wmo):
     elif wmo >= 95: return "雷陣雨"
     return "未知"
 
-# --- 3. 氣象抓取 ---
+# --- 3. 氣象抓取 (同時抓取兩顆大腦) ---
 @st.cache_data(ttl=300) 
 def get_dual_weather():
     fetch_time = datetime.now(TW_TZ).strftime('%Y-%m-%d %H:%M:%S')
@@ -76,6 +76,7 @@ def get_dual_weather():
     
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     
+    # 3.1 抓取 🇩🇪 德國 Open-Meteo
     try:
         lat, lon = "23.936537", "120.697917"
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,weather_code&hourly=temperature_2m,cloud_cover,weather_code&timezone=Asia%2FTaipei"
@@ -99,27 +100,60 @@ def get_dual_weather():
             res_dict["owm"]["tmr_temp"] = res_dict["owm"]["hourly"].get("12:00", {}).get("temp", 28.0)
     except: pass
     
+    # 3.2 抓取 🇹🇼 台灣氣象署 (CWA) 並精準轉換數值
     try:
         cwa_url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization=CWA-3DD5DB13-517F-4C53-8A1C-0D2FB1595975&locationName=南投縣"
         r = requests.get(cwa_url, verify=False, timeout=5).json()
-        wx = r['records']['location'][0]['weatherElement'][0]['time'][0]['parameter']['parameterName']
-        res_dict["cwa"] = {"status": "🟢", "wx": wx, "cloud": 30 if "晴" in wx else 70, "temp": 25.0, "tmr_temp": 28.0}
+        loc = r['records']['location'][0]
+        wx = loc['weatherElement'][0]['time'][0]['parameter']['parameterName']
+        
+        # 精細化雲量轉換邏輯
+        if "晴" in wx and "多雲" in wx: c_val = 30
+        elif "多雲" in wx and "陰" in wx: c_val = 70
+        elif "晴" in wx: c_val = 10
+        elif "陰" in wx: c_val = 90
+        elif "雨" in wx: c_val = 85
+        else: c_val = 50
+        
+        # 抓取目前區段的氣溫近似值
+        min_t = float(loc['weatherElement'][2]['time'][0]['parameter']['parameterName'])
+        max_t = float(loc['weatherElement'][4]['time'][0]['parameter']['parameterName'])
+        curr_t = round((min_t + max_t) / 2.0, 1)
+
+        res_dict["cwa"] = {"status": "🟢", "wx": wx, "cloud": c_val, "temp": curr_t, "tmr_temp": 28.0}
     except: pass
         
     return res_dict
 
 w = get_dual_weather()
-sel = w["owm"] if "國際" in primary_brain and w["owm"]["status"] == "🟢" else w["cwa"]
-
-cloud, temp, tmr_temp = sel["cloud"], sel["temp"], sel["tmr_temp"]
 
 with st.sidebar:
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 大腦運算 ---
+# --- 4. 【V2.21 核心】混血大腦運算邏輯 ---
+
+# 4.1 即時狀態：強制優先使用 🇹🇼 台灣氣象署 (若斷線才用德國備援)
+if w["cwa"]["status"] == "🟢":
+    current_cloud = w["cwa"]["cloud"]
+    current_temp = w["cwa"]["temp"]
+    label_current = "🇹🇼 氣象署即時觀測"
+else:
+    current_cloud = w["owm"]["cloud"]
+    current_temp = w["owm"]["temp"]
+    label_current = "🇩🇪 德國衛星 (備援)"
+
+# 4.2 明日預測：強制優先使用 🇩🇪 德國衛星 (若斷線才用台灣備援)
+if w["owm"]["status"] == "🟢":
+    tmr_temp = w["owm"]["tmr_temp"]
+    label_forecast = "🇩🇪 德國微氣候模型"
+else:
+    tmr_temp = w["cwa"]["tmr_temp"]
+    label_forecast = "🇹🇼 氣象署 (備援)"
+
+# 運算邏輯 (使用混血後的數據)
 temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
 final_predicted_demand = base_load_historical + actual_load_growth + temp_penalty
-solar_eff = 0.95 if cloud < 15 else 0.60 if cloud < 40 else 0.30 if cloud < 75 else 0.15
+solar_eff = 0.95 if current_cloud < 15 else 0.60 if current_cloud < 40 else 0.30 if current_cloud < 75 else 0.15
 est_solar = SOLAR_MAX_KW * solar_eff
 safe_margin = CONTRACT_LIMIT - final_predicted_demand + est_solar
 suggested_ice_hrs = max(1.5, min(9.0, ((2500 - (max(0, min(MAG_MAX_KW, safe_margin)) / MAG_MAX_KW * 240 * 9)) * 1.2 / 2500 * 9)))
@@ -132,7 +166,7 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.20")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.21")
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
@@ -150,27 +184,28 @@ with c_action:
         """, unsafe_allow_html=True)
 
 with c_metrics:
+    # 標籤會動態顯示目前是抓取哪一國的資料
     st.markdown(f"""
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 15px; height: 100%; align-content: center;">
             <div>
                 <div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區氣溫</div>
-                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{temp} <span style="font-size: 20px; color: #555;">°C</span></div>
-                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 即時微氣候觀測</div>
+                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{current_temp} <span style="font-size: 20px; color: #555;">°C</span></div>
+                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {label_current}</div>
             </div>
             <div>
                 <div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區雲量</div>
-                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{cloud} <span style="font-size: 20px; color: #555;">%</span></div>
-                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 決定今日效率</div>
+                <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{current_cloud} <span style="font-size: 20px; color: #555;">%</span></div>
+                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {label_current}</div>
             </div>
             <div>
                 <div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日預測最高溫 (防禦基準)</div>
                 <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{tmr_temp} <span style="font-size: 20px; color: #555;">°C</span></div>
-                <div style="display: inline-block; background: #ffeaea; color: #dc3545; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {tmr_temp-25:.1f} °C (高溫熱負荷)</div>
+                <div style="display: inline-block; background: #ffeaea; color: #dc3545; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {label_forecast}</div>
             </div>
             <div>
                 <div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日太陽能發電估值</div>
                 <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{est_solar:.1f} <span style="font-size: 20px; color: #555;">kW</span></div>
-                <div style="display: inline-block; background: #e6f4ea; color: #28a745; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 依據 {cloud}% 雲量計算</div>
+                <div style="display: inline-block; background: #e6f4ea; color: #28a745; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 依據今日雲量推估</div>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -201,7 +236,7 @@ with sc2:
     """, unsafe_allow_html=True)
 
 st.markdown("---")
-st.subheader("🎯 明日關鍵時段預報追蹤")
+st.subheader("🎯 明日關鍵時段預報追蹤 (來源: 🇩🇪 德國微氣候模型)")
 if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
     h_cols = st.columns(5)
     target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
@@ -224,4 +259,4 @@ c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW")
 c4.metric("🔥 最終預測負載", f"{final_predicted_demand:.1f} kW", "總和預估", delta_color="off")
 c5.metric("⚡ 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
-st.markdown(f"系統運行中 | 氣象大腦同步時間：{w['fetch_time']} | 座標鎖定：23.9365, 120.6979")
+st.markdown(f"系統運行中 | 雙引擎同步時間：{w['fetch_time']} | 座標鎖定：23.9365, 120.6979")
