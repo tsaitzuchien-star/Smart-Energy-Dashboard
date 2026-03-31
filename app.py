@@ -10,7 +10,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.22", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.23", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <meta http-equiv="refresh" content="300">
@@ -37,7 +37,15 @@ st.markdown("""
 with st.sidebar:
     st.header("⚙️ 系統與營運參數")
     
-    st.success("🧠 **混血大腦模式已啟動**\n\n📍 即時觀測：🇹🇼 台灣氣象署\n🔮 趨勢預測：🇩🇪 德國微氣候模型")
+    st.success("🔮 **明日預測防禦基準**\n\n已鎖定：🇩🇪 德國微氣候模型")
+    
+    st.markdown("---")
+    # 【V2.23 全新功能】專屬即時觀測的手動切換器
+    current_source = st.radio(
+        "📍 選擇【目前園區】即時觀測來源：", 
+        ["🇹🇼 台灣氣象署 (南投縣)", "🇩🇪 德國開源氣象 (園區座標)"],
+        help="您可以根據窗外實際天氣，手動選擇目前最準確的氣象來源。"
+    )
     
     st.markdown("---")
     st.header("🔄 資料同步控制")
@@ -75,7 +83,6 @@ def get_dual_weather():
     
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     
-    # 3.1 德國大腦
     try:
         lat, lon = "23.936537", "120.697917"
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,weather_code&hourly=temperature_2m,cloud_cover,weather_code&timezone=Asia%2FTaipei"
@@ -94,11 +101,9 @@ def get_dual_weather():
                 res_dict["owm"]["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "cloud": r['hourly']['cloud_cover'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
         
         try:
-            # 取明日 12:00~15:00 最高溫
             tmr_temps = [r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(12, 16)]
             res_dict["owm"]["tmr_temp"] = max(tmr_temps)
             
-            # 【V2.22 邏輯修正】抓取明日尖峰發電時段 (10:00, 12:00, 14:00) 的最高雲量作為防禦基準
             tmr_clouds = [r['hourly']['cloud_cover'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in [10, 12, 14]]
             res_dict["owm"]["tmr_cloud"] = max(tmr_clouds)
         except:
@@ -106,7 +111,6 @@ def get_dual_weather():
             res_dict["owm"]["tmr_cloud"] = res_dict["owm"]["hourly"].get("12:00", {}).get("cloud", 50)
     except: pass
     
-    # 3.2 台灣氣象署
     try:
         cwa_url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization=CWA-3DD5DB13-517F-4C53-8A1C-0D2FB1595975&locationName=南投縣"
         r = requests.get(cwa_url, verify=False, timeout=5).json()
@@ -136,17 +140,27 @@ with st.sidebar:
 
 # --- 4. 混血大腦運算邏輯 ---
 
-# 4.1 即時狀態：🇹🇼 台灣氣象署優先
-if w["cwa"]["status"] == "🟢":
-    current_cloud = w["cwa"]["cloud"]
-    current_temp = w["cwa"]["temp"]
-    label_current = "🇹🇼 氣象署即時觀測"
+# 4.1 即時狀態：【V2.23】根據側邊欄手動選擇
+if "台灣氣象署" in current_source:
+    if w["cwa"]["status"] == "🟢":
+        current_cloud = w["cwa"]["cloud"]
+        current_temp = w["cwa"]["temp"]
+        label_current = "🇹🇼 氣象署即時觀測"
+    else:
+        current_cloud = w["owm"]["cloud"]
+        current_temp = w["owm"]["temp"]
+        label_current = "連線異常，已切換🇩🇪備援"
 else:
-    current_cloud = w["owm"]["cloud"]
-    current_temp = w["owm"]["temp"]
-    label_current = "🇩🇪 德國衛星 (備援)"
+    if w["owm"]["status"] == "🟢":
+        current_cloud = w["owm"]["cloud"]
+        current_temp = w["owm"]["temp"]
+        label_current = "🇩🇪 德國衛星即時觀測"
+    else:
+        current_cloud = w["cwa"]["cloud"]
+        current_temp = w["cwa"]["temp"]
+        label_current = "連線異常，已切換🇹🇼備援"
 
-# 4.2 明日預測：🇩🇪 德國衛星優先
+# 4.2 明日預測：永遠以 🇩🇪 德國衛星防禦為主
 if w["owm"]["status"] == "🟢":
     tmr_temp = w["owm"]["tmr_temp"]
     tmr_cloud = w["owm"].get("tmr_cloud", 50)
@@ -156,7 +170,7 @@ else:
     tmr_cloud = w["cwa"].get("tmr_cloud", 50)
     label_forecast = "🇹🇼 氣象署 (備援)"
 
-# 【V2.22 運算修正】使用「明日預測雲量 (tmr_cloud)」來推算明日太陽能
+# 使用「明日預測雲量 (tmr_cloud)」推算明日發電
 temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
 final_predicted_demand = base_load_historical + actual_load_growth + temp_penalty
 solar_eff = 0.95 if tmr_cloud < 15 else 0.60 if tmr_cloud < 40 else 0.30 if tmr_cloud < 75 else 0.15
@@ -173,7 +187,7 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.22")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.23")
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
@@ -201,7 +215,7 @@ with c_metrics:
             <div>
                 <div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區雲量</div>
                 <div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{current_cloud} <span style="font-size: 20px; color: #555;">%</span></div>
-                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {label_current}</div>
+                <div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 決定今日效率</div>
             </div>
             <div>
                 <div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日預測最高溫 (防禦基準)</div>
