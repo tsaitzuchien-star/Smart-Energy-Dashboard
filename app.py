@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import urllib3
 from datetime import datetime, timedelta, timezone
+import time
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -9,9 +10,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.19", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.20", page_icon="❄️", layout="wide")
 
+# 【V2.20 核心功能】自動定時重新整理 (每 5 分鐘)
+# 利用 HTML Meta Refresh 技術，讓瀏覽器每 300 秒自動 rerun 程式
 st.markdown("""
+    <meta http-equiv="refresh" content="300">
     <style>
     .ice-card { 
         background-color: white; 
@@ -38,9 +42,10 @@ with st.sidebar:
     
     st.markdown("---")
     st.header("🔄 資料同步控制")
-    if st.button("🔄 強制同步最新氣象", use_container_width=True):
+    if st.button("🔄 立即強制同步 (手動)", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
+    st.info("💡 系統已啟動【自動巡航】，每 5 分鐘會自動與衛星同步數據。")
 
 # --- 2. 參數與台電規則 ---
 SOLAR_MAX_KW, MAG_MAX_KW = 146.0, 141.8
@@ -63,7 +68,6 @@ def wmo_to_text(wmo):
 # --- 3. 氣象抓取 ---
 @st.cache_data(ttl=300) 
 def get_dual_weather():
-    # 【V2.19 新增】在抓取資料的瞬間，蓋上台灣時間的時間戳記
     fetch_time = datetime.now(TW_TZ).strftime('%Y-%m-%d %H:%M:%S')
     
     res_dict = {"fetch_time": fetch_time,
@@ -77,11 +81,7 @@ def get_dual_weather():
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,weather_code&hourly=temperature_2m,cloud_cover,weather_code&timezone=Asia%2FTaipei"
         r = requests.get(om_url, timeout=5).json()
         res_dict["owm"] = {
-            "status": "🟢", 
-            "wx": wmo_to_text(r['current']['weather_code']), 
-            "cloud": r['current']['cloud_cover'], 
-            "temp": r['current']['temperature_2m'], 
-            "hourly": {}
+            "status": "🟢", "wx": wmo_to_text(r['current']['weather_code']), "cloud": r['current']['cloud_cover'], "temp": r['current']['temperature_2m'], "hourly": {}
         }
         
         target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
@@ -113,10 +113,8 @@ sel = w["owm"] if "國際" in primary_brain and w["owm"]["status"] == "🟢" els
 
 cloud, temp, tmr_temp = sel["cloud"], sel["temp"], sel["tmr_temp"]
 
-# 將剛剛抓到的時間戳記顯示在側邊欄按鈕下方
 with st.sidebar:
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
-    st.caption("系統預設每 5 分鐘自動更新一次。")
 
 # --- 4. 大腦運算 ---
 temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
@@ -134,7 +132,7 @@ start_time_str = f"{start_h:02d}:{start_m:02d}"
 end_time_str = "06:30"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.19")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.20")
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
@@ -226,5 +224,4 @@ c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW")
 c4.metric("🔥 最終預測負載", f"{final_predicted_demand:.1f} kW", "總和預估", delta_color="off")
 c5.metric("⚡ 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
-# 狀態列也同步正名
 st.markdown(f"系統運行中 | 氣象大腦同步時間：{w['fetch_time']} | 座標鎖定：23.9365, 120.6979")
