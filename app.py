@@ -4,26 +4,14 @@ import urllib3
 from datetime import datetime, timedelta, timezone
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# 強制鎖定台灣時區 (UTC+8)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.27", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.28", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
-    .ice-card { 
-        background-color: white; 
-        padding: 40px 20px; 
-        border-radius: 15px; 
-        text-align: center; 
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.05); 
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-    }
+    .ice-card { background-color: white; padding: 40px 20px; border-radius: 15px; text-align: center; box-shadow: 2px 2px 10px rgba(0,0,0,0.05); height: 100%; display: flex; flex-direction: column; justify-content: center; }
     .ice-value { font-size: 85px; font-weight: 900; color: #1f77b4; line-height: 1.1; }
     .ice-unit { font-size: 28px; color: #555; font-weight: bold; }
     .action-call { background-color: #1E3A8A; color: white; padding: 15px; border-radius: 10px; font-size: 24px; font-weight: bold; text-align: center; margin-top: 15px; }
@@ -122,8 +110,11 @@ final_predicted_demand = true_base_load + actual_load_growth + temp_penalty
 solar_eff = 0.95 if tmr_cloud < 15 else 0.60 if tmr_cloud < 40 else 0.30 if tmr_cloud < 75 else 0.15
 est_solar = SOLAR_MAX_KW * solar_eff
 
+# 【V2.28 核心新增】台電實切需量 (Net Grid Demand)
+net_grid_demand = final_predicted_demand - est_solar
+
 buffer = 15.0
-demand_gap = final_predicted_demand - est_solar - (CONTRACT_LIMIT - buffer)
+demand_gap = net_grid_demand - (CONTRACT_LIMIT - buffer)
 
 if demand_gap > 0:
     needed_ice_rt = demand_gap / MAG_EFF
@@ -141,7 +132,16 @@ start_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
 end_time_str = "07:00"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.27")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.28")
+
+# 【V2.28 修正】讓行動指令明確講出「台電需量」
+if suggested_ice_hrs <= 2:
+    action_msg = f"🟢 預估台電需量 {net_grid_demand:.1f} kW，低於契約容量！太陽能救援成功，執行例行儲冰即可。"
+elif suggested_ice_hrs <= 4:
+    action_msg = f"🟡 預估台電需量 {net_grid_demand:.1f} kW 逼近警戒，需融冰救援！請儲冰 {suggested_ice_hrs:.1f} 小時。"
+else:
+    action_msg = f"🔴 警告：台電需量暴增至 {net_grid_demand:.1f} kW！務必完成 {suggested_ice_hrs:.1f} 小時長時間儲冰，嚴防超約！"
+
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
@@ -152,13 +152,10 @@ with c_action:
 with c_metrics:
     st.markdown(f"""<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 15px; height: 100%; align-content: center;"><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區氣溫</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 即時微氣候觀測</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區雲量</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{cloud} <span style="font-size: 20px; color: #555;">%</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 影響現在發電</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日預測最高溫 (防禦基準)</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{tmr_temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #ffeaea; color: #dc3545; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {tmr_temp-25:.1f} °C (高溫熱負荷)</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日太陽能發電估值</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{est_solar:.1f} <span style="font-size: 20px; color: #555;">kW</span></div><div style="display: inline-block; background: #e6f4ea; color: #28a745; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 依據明日 {tmr_cloud}% 雲量計算</div></div></div>""", unsafe_allow_html=True)
 
-action_msg = "🟢 電力餘裕充足，執行例行儲冰即可。" if suggested_ice_hrs <= 2 else "🟡 預計明日高溫或多雲，請確實檢查儲冰系統運作。" if suggested_ice_hrs <= 4 else "🔴 警告：明日負載極高，務必完成長時間儲冰，嚴防超約！"
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
 
-# 【V2.27 修正】換成標準 subheader，字體完美一致且不會有 ### 跑出來
 st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
-
 sc1, sc2 = st.columns(2)
 with sc1:
     st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間製冰排程 (Ice Storage)</b><br><br>啟動：<span class="schedule-time">{start_time_str}</span><br>停止：<span class="schedule-time">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">*已優化截止時間，減少儲槽待機損耗。</span></div>""", unsafe_allow_html=True)
@@ -180,13 +177,22 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
                 st.progress(h_data['cloud'] / 100, text=f"☁️ 雲量 {h_data['cloud']}%")
             else: st.write("資料擷取中...")
 
+# 【V2.28 修正】兩段式攤牌，徹底澄清誤會
 st.markdown("---")
-st.subheader("📊 明日負載預測與決策基礎")
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("歷史基礎負載", f"{base_load_historical:.1f} kW")
+st.subheader("📊 明日負載預測與決策基礎 (台電實切需量分析)")
+
+st.markdown("**▶ 步驟一：園區建築物總耗能推算**")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("歷史基礎負載", f"{base_load_historical:.1f} kW", f"含 {ice_restoration_kw}kW 融冰還原", delta_color="off")
 c2.metric("📈 擴編動態加載", f"+{actual_load_growth:.1f} kW", "全勤滿載計算")
-c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW")
-c4.metric("🔥 明日最終預測負載", f"{final_predicted_demand:.1f} kW", f"含 {ice_restoration_kw}kW 融冰還原")
-c5.metric("⚡ 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
+c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C")
+c4.metric("🔥 園區總負載預測", f"{final_predicted_demand:.1f} kW", "建築物實際消耗總和", delta_color="off")
+
+st.markdown("**▶ 步驟二：對決台電契約容量 (扣除太陽能綠電)**")
+c5, c6, c7, c8 = st.columns(4)
+c5.metric("🔥 園區總負載預測", f"{final_predicted_demand:.1f} kW", "來源於步驟一", delta_color="off")
+c6.metric("🌞 太陽能發電折抵", f"-{est_solar:.1f} kW", f"依 {tmr_cloud}% 雲量預估", delta_color="normal")
+c7.metric("⚡ 預估台電電表需量", f"{net_grid_demand:.1f} kW", "實際向台電買電量", delta_color="inverse")
+c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
 st.markdown(f"系統運行中 | 氣象大腦同步時間：{w['fetch_time']} | 設備參數：BCU-1(儲冰主機) & IB-1(2500RT-HR)")
