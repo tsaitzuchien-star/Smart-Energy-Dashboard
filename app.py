@@ -7,7 +7,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.28", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.29", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -33,7 +33,12 @@ with st.sidebar:
 ICE_CHILLER_KW = 241.0       
 ICE_CHILLER_CAP_RT = 242.5   
 ICE_BANK_MAX_RTHR = 2500.0   
-MAG_EFF = 0.7                
+
+# 【V2.29 新增】磁浮主機規格與 70% 封印參數
+MAG_CHILLER_RT = 200.0       # 磁浮主機總噸數
+MAG_CAP_LIMIT = 0.70         # 同仁設定的 70% 負載上限
+MAG_EFF = 0.7                # 磁浮主機效率 (kW/RT)
+
 SOLAR_MAX_KW = 146.0         
 now_dt = datetime.now(TW_TZ)
 current_month = now_dt.month
@@ -104,25 +109,32 @@ cloud, temp, tmr_temp, tmr_cloud = sel["cloud"], sel["temp"], sel["tmr_temp"], s
 with st.sidebar:
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 大腦精準運算 ---
+# --- 4. 大腦精準運算 (V2.29 能量轉移邏輯) ---
 temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
-final_predicted_demand = true_base_load + actual_load_growth + temp_penalty
-solar_eff = 0.95 if tmr_cloud < 15 else 0.60 if tmr_cloud < 40 else 0.30 if tmr_cloud < 75 else 0.15
+
+# 【核心1】計算 70% 封印省下的電網需量 (假設高溫時原本會滿載，現省下 30% 功率)
+shaved_kw_by_cap = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
+
+# 園區預估總負載 (扣除封印降載的部分)
+raw_predicted_demand = true_base_load + actual_load_growth + temp_penalty
+final_predicted_demand = raw_predicted_demand - shaved_kw_by_cap
+
 est_solar = SOLAR_MAX_KW * solar_eff
-
-# 【V2.28 核心新增】台電實切需量 (Net Grid Demand)
 net_grid_demand = final_predicted_demand - est_solar
-
 buffer = 15.0
 demand_gap = net_grid_demand - (CONTRACT_LIMIT - buffer)
 
+# 【核心2】計算儲冰總需求 (電網防禦缺口 + 填補磁浮主機少做 30% 的冷量)
+needed_ice_rthr_for_grid = 0
 if demand_gap > 0:
-    needed_ice_rt = demand_gap / MAG_EFF
-    needed_ice_rthr = needed_ice_rt * 6.0 
-    suggested_ice_hrs = (needed_ice_rthr * 1.2) / ICE_CHILLER_CAP_RT
-else:
-    suggested_ice_hrs = 1.5 
+    needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 
 
+# 假設這缺失的 30% 冷量，在下午最熱的 4 小時必須由融冰全數補上
+extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0
+
+# 最終總共需要準備的冰塊量 (加總後乘上 1.2 倍安全係數)
+total_needed_ice_rthr = needed_ice_rthr_for_grid + extra_ice_rthr_for_cooling
+suggested_ice_hrs = (total_needed_ice_rthr * 1.2) / ICE_CHILLER_CAP_RT
 suggested_ice_hrs = max(1.5, min(9.0, suggested_ice_hrs))
 
 end_minutes = 7 * 60 
@@ -132,13 +144,12 @@ start_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
 end_time_str = "07:00"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.28")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.29")
 
-# 【V2.28 修正】讓行動指令明確講出「台電需量」
 if suggested_ice_hrs <= 2:
-    action_msg = f"🟢 預估台電需量 {net_grid_demand:.1f} kW，低於契約容量！太陽能救援成功，執行例行儲冰即可。"
-elif suggested_ice_hrs <= 4:
-    action_msg = f"🟡 預估台電需量 {net_grid_demand:.1f} kW 逼近警戒，需融冰救援！請儲冰 {suggested_ice_hrs:.1f} 小時。"
+    action_msg = f"🟢 預估台電需量 {net_grid_demand:.1f} kW，低於契約容量！太陽能與磁浮封印奏效，執行例行儲冰即可。"
+elif suggested_ice_hrs <= 5:
+    action_msg = f"🟡 預估台電需量 {net_grid_demand:.1f} kW 逼近警戒！需補充磁浮 70% 封印缺口，請儲冰 {suggested_ice_hrs:.1f} 小時。"
 else:
     action_msg = f"🔴 警告：台電需量暴增至 {net_grid_demand:.1f} kW！務必完成 {suggested_ice_hrs:.1f} 小時長時間儲冰，嚴防超約！"
 
@@ -146,7 +157,7 @@ st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
 with c_action:
-    border_color = "#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 4 else "#dc3545"
+    border_color = "#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 5 else "#dc3545"
     st.markdown(f"""<div class="ice-card" style="border: 4px solid {border_color};"><div style="font-size: 24px; color: #666; font-weight: bold; margin-bottom: 10px;">建議今晚儲冰時間</div><div><span class="ice-value">{suggested_ice_hrs:.1f}</span><span class="ice-unit">小時</span></div></div>""", unsafe_allow_html=True)
 
 with c_metrics:
@@ -158,7 +169,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
 sc1, sc2 = st.columns(2)
 with sc1:
-    st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間製冰排程 (Ice Storage)</b><br><br>啟動：<span class="schedule-time">{start_time_str}</span><br>停止：<span class="schedule-time">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">*已優化截止時間，減少儲槽待機損耗。</span></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間製冰排程 (Ice Storage)</b><br><br>啟動：<span class="schedule-time">{start_time_str}</span><br>停止：<span class="schedule-time">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">*已包含填補磁浮 70% 封印所需之額外冰量。</span></div>""", unsafe_allow_html=True)
 with sc2:
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程 (Ice Melting)</b><br><br>啟動：<span class="schedule-time">10:00</span><br>停止：<span class="schedule-time">16:00</span><br><br><span style="font-size:16px; color:#666;">*依 IB-1 設計 13°C 進水條件執行。</span></div>""", unsafe_allow_html=True)
 
@@ -177,15 +188,15 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
                 st.progress(h_data['cloud'] / 100, text=f"☁️ 雲量 {h_data['cloud']}%")
             else: st.write("資料擷取中...")
 
-# 【V2.28 修正】兩段式攤牌，徹底澄清誤會
 st.markdown("---")
 st.subheader("📊 明日負載預測與決策基礎 (台電實切需量分析)")
 
 st.markdown("**▶ 步驟一：園區建築物總耗能推算**")
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("歷史基礎負載", f"{base_load_historical:.1f} kW", f"含 {ice_restoration_kw}kW 融冰還原", delta_color="off")
-c2.metric("📈 擴編動態加載", f"+{actual_load_growth:.1f} kW", "全勤滿載計算")
-c3.metric("🌡️ 溫度加載", f"+{temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C")
+c1.metric("歷史基礎與動態加載", f"{true_base_load + actual_load_growth:.1f} kW", "含融冰還原與全勤加載", delta_color="off")
+c2.metric("🌡️ 高溫熱負荷加載", f"+{temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C")
+# 【V2.29 新增】把 70% 封印降載視覺化！
+c3.metric("🛡️ 磁浮 70% 封印降載", f"-{shaved_kw_by_cap:.1f} kW", "硬體限制省下需量", delta_color="normal")
 c4.metric("🔥 園區總負載預測", f"{final_predicted_demand:.1f} kW", "建築物實際消耗總和", delta_color="off")
 
 st.markdown("**▶ 步驟二：對決台電契約容量 (扣除太陽能綠電)**")
