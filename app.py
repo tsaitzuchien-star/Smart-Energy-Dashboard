@@ -7,7 +7,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.30", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.31", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -20,21 +20,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-with st.sidebar:
-    st.header("⚙️ 系統與營運參數")
-    primary_brain = st.radio("大腦決策來源", ["🇩🇪 國際開源氣象 (園區座標)", "🇹🇼 台灣氣象署 (南投縣)"])
-    st.markdown("---")
-    st.header("🔄 資料同步控制")
-    if st.button("🔄 強制同步最新氣象", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-
 # --- 2. 參數與原廠硬體規格 ---
 ICE_CHILLER_KW = 241.0       
 ICE_CHILLER_CAP_RT = 242.5   
 ICE_BANK_MAX_RTHR = 2500.0   
 
-# 磁浮主機規格與 70% 封印參數
 MAG_CHILLER_RT = 200.0       
 MAG_CAP_LIMIT = 0.70         
 MAG_EFF = 0.7                
@@ -43,12 +33,30 @@ SOLAR_MAX_KW = 146.0
 now_dt = datetime.now(TW_TZ)
 current_month = now_dt.month
 CONTRACT_LIMIT, season_tag = (452.0, "夏月") if 6 <= current_month <= 9 else (516.0, "非夏月")
-
 historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530, 8: 504, 9: 428, 10: 460, 11: 500, 12: 394}
 base_load_historical = historical_max_demand.get(current_month, 400)
-ice_restoration_kw = 60.0 if 1 <= current_month <= 5 else 0.0
-true_base_load = base_load_historical + ice_restoration_kw
-actual_load_growth = 70.0  
+
+with st.sidebar:
+    st.header("⚙️ 系統與營運參數")
+    primary_brain = st.radio("大腦決策來源", ["🇩🇪 國際開源氣象 (園區座標)", "🇹🇼 台灣氣象署 (南投縣)"])
+    
+    st.markdown("---")
+    st.header("🏢 動態負載微調 (老闆建議)")
+    # 【V2.31 新增】進駐率拉桿
+    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=70, step=5)
+    actual_load_growth = 70.0 * (occupancy_rate / 100.0)
+    
+    # 【V2.31 新增】磁浮耗電補償拉桿 (釐清 60kW 誤會)
+    st.caption("去年 1~5 月無磁浮主機，需補償『今年磁浮主機』的預估耗電：")
+    chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
+    ice_restoration_kw = chiller_compensation if 1 <= current_month <= 5 else 0.0
+    true_base_load = base_load_historical + ice_restoration_kw
+
+    st.markdown("---")
+    st.header("🔄 資料同步控制")
+    if st.button("🔄 強制同步最新氣象", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
 
 def wmo_to_text(wmo):
     if wmo == 0: return "晴朗"
@@ -109,17 +117,13 @@ cloud, temp, tmr_temp, tmr_cloud = sel["cloud"], sel["temp"], sel["tmr_temp"], s
 with st.sidebar:
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 大腦精準運算 (V2.30 穩定除錯版) ---
+# --- 4. 大腦精準運算 ---
 temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
-
-# 計算 70% 封印省下的電網需量
 shaved_kw_by_cap = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
 
-# 園區預估總負載 (扣除封印降載的部分)
 raw_predicted_demand = true_base_load + actual_load_growth + temp_penalty
 final_predicted_demand = raw_predicted_demand - shaved_kw_by_cap
 
-# 【修復】把這行不小心刪掉的太陽能效率計算補回來！
 solar_eff = 0.95 if tmr_cloud < 15 else 0.60 if tmr_cloud < 40 else 0.30 if tmr_cloud < 75 else 0.15
 est_solar = SOLAR_MAX_KW * solar_eff
 
@@ -127,15 +131,12 @@ net_grid_demand = final_predicted_demand - est_solar
 buffer = 15.0
 demand_gap = net_grid_demand - (CONTRACT_LIMIT - buffer)
 
-# 計算儲冰總需求
 needed_ice_rthr_for_grid = 0
 if demand_gap > 0:
     needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 
 
-# 填補磁浮主機少做 30% 的冷量
 extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0
 
-# 最終總共需要準備的冰塊量
 total_needed_ice_rthr = needed_ice_rthr_for_grid + extra_ice_rthr_for_cooling
 suggested_ice_hrs = (total_needed_ice_rthr * 1.2) / ICE_CHILLER_CAP_RT
 suggested_ice_hrs = max(1.5, min(9.0, suggested_ice_hrs))
@@ -147,7 +148,7 @@ start_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
 end_time_str = "07:00"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.30")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.31")
 
 if suggested_ice_hrs <= 2:
     action_msg = f"🟢 預估台電需量 {net_grid_demand:.1f} kW，低於契約容量！太陽能與磁浮封印奏效，執行例行儲冰即可。"
@@ -196,7 +197,7 @@ st.subheader("📊 明日負載預測與決策基礎 (台電實切需量分析)"
 
 st.markdown("**▶ 步驟一：園區建築物總耗能推算**")
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("歷史基礎與動態加載", f"{true_base_load + actual_load_growth:.1f} kW", "含融冰還原與全勤加載", delta_color="off")
+c1.metric("歷史基礎與動態加載", f"{true_base_load + actual_load_growth:.1f} kW", f"依進駐率 {occupancy_rate}% 計算", delta_color="off")
 c2.metric("🌡️ 高溫熱負荷加載", f"+{temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C")
 c3.metric("🛡️ 磁浮 70% 封印降載", f"-{shaved_kw_by_cap:.1f} kW", "硬體限制省下需量", delta_color="normal")
 c4.metric("🔥 園區總負載預測", f"{final_predicted_demand:.1f} kW", "建築物實際消耗總和", delta_color="off")
