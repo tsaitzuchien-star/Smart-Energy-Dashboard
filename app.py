@@ -209,7 +209,7 @@ else:
 st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.36")
 
 if is_holiday:
-    action_msg = f"🎉 假日停機警報：明日 ({tmr_str}) 為休息日/補假！請【暫停今晚製冰】，並務必手動解除明天的磁浮與融冰自動排程。"
+    action_msg = f"🎉 假日停機警報：明日 ({tmr_str}) 為休息日/補假！請【暫停今晚儲冰】，並務必手動解除明天的磁浮與融冰自動排程。"
 elif suggested_ice_hrs <= 2:
     action_msg = f"🟢 預估台電需量 {net_grid_demand:.1f} kW，低於契約容量！綠電與降載奏效，執行例行儲冰即可。"
 elif suggested_ice_hrs <= 5:
