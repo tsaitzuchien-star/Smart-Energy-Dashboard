@@ -7,7 +7,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.33", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.34", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -16,7 +16,7 @@ st.markdown("""
     .ice-unit { font-size: 28px; color: #555; font-weight: bold; }
     .action-call { background-color: #1E3A8A; color: white; padding: 15px; border-radius: 10px; font-size: 24px; font-weight: bold; text-align: center; margin-top: 15px; }
     .schedule-box { padding: 20px; border-radius: 10px; border: 2px dashed #4682B4; background-color: #F0F8FF; font-size: 20px;}
-    .schedule-time { font-size: 32px; font-weight: bold; color: #D2691E; }
+    .schedule-time { font-size: 32px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -70,7 +70,7 @@ def wmo_to_text(wmo):
     elif wmo >= 95: return "雷陣雨"
     return "未知"
 
-# --- 3. 氣象抓取 (V2.33 升級歐洲 ECMWF 與短波輻射) ---
+# --- 3. 氣象抓取 ---
 @st.cache_data(ttl=300) 
 def get_dual_weather():
     fetch_time = datetime.now(TW_TZ).strftime('%Y-%m-%d %H:%M:%S')
@@ -78,7 +78,6 @@ def get_dual_weather():
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     try:
         lat, lon = "23.936537", "120.697917"
-        # 【核心升級】指定 models=ecmwf_ifs (歐洲中期預報) 並抓取 shortwave_radiation (短波輻射)
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
         r = requests.get(om_url, timeout=5).json()
         res_dict["owm"]["status"] = "🟢"
@@ -104,12 +103,20 @@ def get_dual_weather():
         try:
             tmr_clouds = [r['hourly']['cloud_cover'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]
             res_dict["owm"]["tmr_cloud"] = int(sum(tmr_clouds) / len(tmr_clouds))
-            # 抓取明日白天平均短波輻射 (W/m²)
             tmr_rads = [r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]
             res_dict["owm"]["tmr_rad"] = int(sum(tmr_rads) / len(tmr_rads))
         except:
             res_dict["owm"]["tmr_cloud"] = res_dict["owm"]["cloud"]
             res_dict["owm"]["tmr_rad"] = res_dict["owm"]["rad"]
+    except: pass
+    try:
+        cwa_url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization=CWA-3DD5DB13-517F-4C53-8A1C-0D2FB1595975&locationName=南投縣"
+        r = requests.get(cwa_url, verify=False, timeout=5).json()
+        wx = r['records']['location'][0]['weatherElement'][0]['time'][0]['parameter']['parameterName']
+        res_dict["cwa"]["status"] = "🟢"
+        res_dict["cwa"]["wx"] = wx
+        res_dict["cwa"]["cloud"] = 30 if "晴" in wx else 70
+        res_dict["cwa"]["tmr_cloud"] = res_dict["cwa"]["cloud"]
     except: pass
     return res_dict
 
@@ -122,16 +129,34 @@ tmr_rad = sel.get("tmr_rad", 400)
 with st.sidebar:
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 大腦精準運算 ---
+# --- 4. 2026 國定假日與自動判定大腦 ---
+tmr_dt = now_dt + timedelta(days=1)
+tmr_str = tmr_dt.strftime("%Y-%m-%d")
+
+# 內建 2026 年台灣所有平日補假與國定假日清單 (六日會自動判定)
+TAIWAN_HOLIDAYS_2026 = [
+    "2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20",
+    "2026-02-27", "2026-04-03", "2026-04-06", "2026-05-01", "2026-06-19", 
+    "2026-09-25", "2026-09-28", "2026-10-09", "2026-10-26", "2026-12-25"
+]
+
+# 判斷明日是否為六日或國定假日
+is_holiday = tmr_dt.weekday() >= 5 or tmr_str in TAIWAN_HOLIDAYS_2026
+
+# --- 大腦精準運算 ---
 temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
 shaved_kw_by_cap = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
+
+# 若為假日，強制抽掉全勤加載與降低溫度影響
+if is_holiday:
+    actual_load_growth = 0.0
+    temp_penalty = temp_penalty * 0.3
+    shaved_kw_by_cap = 0.0
 
 raw_predicted_demand = true_base_load + actual_load_growth + temp_penalty
 final_predicted_demand = raw_predicted_demand - shaved_kw_by_cap
 
-# 【V2.33 核心】用「輻射值 W/m²」取代雲量來推算太陽能效率
 if solar_mode == "🤖 API 短波輻射精準推算":
-    # 台灣日照極佳時平均輻射約 600~800 W/m²。用輻射值換算效率，徹底無視薄雲干擾。
     if tmr_rad >= 500: solar_eff = 0.95
     elif tmr_rad >= 350: solar_eff = 0.70
     elif tmr_rad >= 150: solar_eff = 0.40
@@ -150,22 +175,36 @@ needed_ice_rthr_for_grid = 0
 if demand_gap > 0:
     needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 
 
-extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0
+extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0 if not is_holiday else 0.0
 
 total_needed_ice_rthr = needed_ice_rthr_for_grid + extra_ice_rthr_for_cooling
 suggested_ice_hrs = (total_needed_ice_rthr * 1.2) / ICE_CHILLER_CAP_RT
-suggested_ice_hrs = max(1.5, min(9.0, suggested_ice_hrs))
 
-end_minutes = 7 * 60 
-start_minutes = int(end_minutes - (suggested_ice_hrs * 60))
-if start_minutes < 0: start_minutes += 24 * 60
-start_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
-end_time_str = "07:00"
+# 假日強制 0 小時，平日限制 1.5 ~ 9.0 小時
+if is_holiday:
+    suggested_ice_hrs = 0.0
+    start_time_str = "關閉排程"
+    end_time_str = "關閉排程"
+    melt_start = "關閉排程"
+    melt_end = "關閉排程"
+    time_color = "#dc3545" # 紅色警告色
+else:
+    suggested_ice_hrs = max(1.5, min(9.0, suggested_ice_hrs))
+    end_minutes = 7 * 60 
+    start_minutes = int(end_minutes - (suggested_ice_hrs * 60))
+    if start_minutes < 0: start_minutes += 24 * 60
+    start_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
+    end_time_str = "07:00"
+    melt_start = "10:00"
+    melt_end = "16:00"
+    time_color = "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.33")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.34")
 
-if suggested_ice_hrs <= 2:
+if is_holiday:
+    action_msg = f"🎉 假日停機警報：明日 ({tmr_str}) 為休息日/補假！請【暫停今晚製冰】，並務必手動解除明天的磁浮與融冰自動排程。"
+elif suggested_ice_hrs <= 2:
     action_msg = f"🟢 預估台電需量 {net_grid_demand:.1f} kW，低於契約容量！綠電與降載奏效，執行例行儲冰即可。"
 elif suggested_ice_hrs <= 5:
     action_msg = f"🟡 預估台電需量 {net_grid_demand:.1f} kW 逼近警戒！需補充 70% 封印缺口，請儲冰 {suggested_ice_hrs:.1f} 小時。"
@@ -176,21 +215,28 @@ st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 
 c_action, c_metrics = st.columns([1.2, 1])
 with c_action:
-    border_color = "#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 5 else "#dc3545"
+    if is_holiday:
+        border_color = "#17a2b8"
+    else:
+        border_color = "#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 5 else "#dc3545"
     st.markdown(f"""<div class="ice-card" style="border: 4px solid {border_color};"><div style="font-size: 24px; color: #666; font-weight: bold; margin-bottom: 10px;">建議今晚儲冰時間</div><div><span class="ice-value">{suggested_ice_hrs:.1f}</span><span class="ice-unit">小時</span></div></div>""", unsafe_allow_html=True)
 
 with c_metrics:
     st.markdown(f"""<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 15px; height: 100%; align-content: center;"><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區氣溫</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 即時微氣候觀測</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前短波輻射強度</div><div style="font-size: 45px; font-weight: 700; color: #d35400; line-height: 1.1;">{current_rad} <span style="font-size: 20px; color: #555;">W/m²</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 無視薄雲干擾之真實日照</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日預測最高溫 (防禦基準)</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{tmr_temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #ffeaea; color: #dc3545; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {tmr_temp-25:.1f} °C (高溫熱負荷)</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日太陽能發電估值</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{est_solar:.1f} <span style="font-size: 20px; color: #555;">kW</span></div><div style="display: inline-block; background: #e6f4ea; color: #28a745; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">{solar_ui_label}</div></div></div>""", unsafe_allow_html=True)
 
-st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
+# 假日警報特別用不同顏色底色標示
+action_bg = "#17a2b8" if is_holiday else "#1E3A8A"
+st.markdown(f'<div class="action-call" style="background-color: {action_bg};">{action_msg}</div>', unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
 sc1, sc2 = st.columns(2)
 with sc1:
-    st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間製冰排程 (Ice Storage)</b><br><br>啟動：<span class="schedule-time">{start_time_str}</span><br>停止：<span class="schedule-time">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">*已包含填補磁浮 70% 封印所需之額外冰量。</span></div>""", unsafe_allow_html=True)
+    memo_1 = "*明日為假日，無需製冰備戰。" if is_holiday else "*已包含填補磁浮 70% 封印所需之額外冰量。"
+    st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間製冰排程 (Ice Storage)</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
 with sc2:
-    st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程 (Ice Melting)</b><br><br>啟動：<span class="schedule-time">10:00</span><br>停止：<span class="schedule-time">16:00</span><br><br><span style="font-size:16px; color:#666;">*依 IB-1 設計 13°C 進水條件執行。</span></div>""", unsafe_allow_html=True)
+    memo_2 = "*明日為假日，務必手動關閉 1-5 磁浮與融冰自動排程！" if is_holiday else "*依 IB-1 設計 13°C 進水條件執行。"
+    st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程 (Ice Melting)</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{memo_2}</span></div>""", unsafe_allow_html=True)
 
 st.markdown("---")
 st.subheader("🎯 明日關鍵時段預報追蹤 (ECMWF 歐洲中期預報)")
@@ -204,7 +250,6 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
                 h_data = w["owm"]["hourly"][h]
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ **{h_data['temp']} °C**")
-                # 【改版】視覺化顯示輻射強度
                 st.progress(min(1.0, h_data['rad'] / 1000.0), text=f"☀️ 輻射 {h_data['rad']} W/m²")
             else: st.write("資料擷取中...")
 
@@ -213,7 +258,7 @@ st.subheader("📊 明日負載預測與決策基礎 (台電實切需量分析)"
 
 st.markdown("**▶ 步驟一：園區建築物總耗能推算**")
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("歷史基礎與動態加載", f"{true_base_load + actual_load_growth:.1f} kW", f"依進駐率 {occupancy_rate}% 計算", delta_color="off")
+c1.metric("歷史基礎與動態加載", f"{true_base_load + actual_load_growth:.1f} kW", f"依進駐率 {occupancy_rate if not is_holiday else 0}% 計算", delta_color="off")
 c2.metric("🌡️ 高溫熱負荷加載", f"+{temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C")
 c3.metric("🛡️ 磁浮 70% 封印降載", f"-{shaved_kw_by_cap:.1f} kW", "硬體限制省下需量", delta_color="normal")
 c4.metric("🔥 園區總負載預測", f"{final_predicted_demand:.1f} kW", "建築物實際消耗總和", delta_color="off")
