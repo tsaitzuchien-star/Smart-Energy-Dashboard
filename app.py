@@ -7,7 +7,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.37", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.38", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -30,7 +30,8 @@ MAG_CHILLER_RT = 200.0
 MAG_CAP_LIMIT = 0.70         
 MAG_EFF = 0.7                
 
-SOLAR_MAX_KW = 138.0         
+# 【V2.38 核心修正】依據 CSV 四電表加總實測，太陽能峰值精準校正為 135.0 kW
+SOLAR_MAX_KW = 135.0         
 
 now_dt = datetime.now(TW_TZ)
 current_month = now_dt.month
@@ -45,7 +46,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.header("🌞 太陽能預測校正")
-    solar_mode = st.radio("太陽能預估模式", ["🤖 API 短波輻射精準推算", "✋ 廠務手動強制設定"])
+    solar_mode = st.radio("太陽能預估模式", ["🤖 API 短波輻射精準推算", "✋ 廠務手動強制設定"], help="歐洲 ECMWF 模式會抓取短波輻射(W/m²)來無視薄雲干擾。")
     if solar_mode == "✋ 廠務手動強制設定":
         manual_solar = st.slider("手動設定明日巔峰太陽能 (kW)", min_value=0.0, max_value=SOLAR_MAX_KW, value=80.0, step=1.0)
     
@@ -113,6 +114,15 @@ def get_dual_weather():
             res_dict["owm"]["tmr_cloud"] = res_dict["owm"]["cloud"]
             res_dict["owm"]["tmr_rad"] = res_dict["owm"]["rad"]
     except: pass
+    try:
+        cwa_url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization=CWA-3DD5DB13-517F-4C53-8A1C-0D2FB1595975&locationName=南投縣"
+        r = requests.get(cwa_url, verify=False, timeout=5).json()
+        wx = r['records']['location'][0]['weatherElement'][0]['time'][0]['parameter']['parameterName']
+        res_dict["cwa"]["status"] = "🟢"
+        res_dict["cwa"]["wx"] = wx
+        res_dict["cwa"]["cloud"] = 30 if "晴" in wx else 70
+        res_dict["cwa"]["tmr_cloud"] = res_dict["cwa"]["cloud"]
+    except: pass
     return res_dict
 
 w = get_dual_weather()
@@ -141,13 +151,11 @@ else:
 raw_predicted_demand = true_base_load + actual_load_growth + temp_penalty
 final_predicted_demand = raw_predicted_demand - shaved_kw_by_cap
 
+# 【V2.38 核心】引入實測大數據連續轉換公式
 if solar_mode == "🤖 API 短波輻射精準推算":
-    if tmr_rad >= 500: solar_eff = 0.95
-    elif tmr_rad >= 350: solar_eff = 0.70
-    elif tmr_rad >= 150: solar_eff = 0.40
-    else: solar_eff = 0.15
+    solar_eff = min(1.0, tmr_rad / 1000.0)
     est_solar = SOLAR_MAX_KW * solar_eff
-    solar_ui_label = f"↑ 依 ECMWF 短波輻射 {tmr_rad} W/m² 計算"
+    solar_ui_label = f"↑ 實測大數據轉換 (輻射 {tmr_rad} W/m²)"
 else:
     est_solar = manual_solar
     solar_ui_label = "↑ ✋ 廠務手動巔峰校正"
@@ -178,7 +186,7 @@ else:
     time_color = "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.37")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.38")
 
 if is_holiday:
     action_msg = f"🎉 假日停機警報：明日 ({tmr_str}) 為休息日/補假！請【暫停今晚製冰】，並手動解除排程。"
@@ -223,14 +231,12 @@ with sc2:
     memo_2 = "*明日為假日，務必手動關閉 1-5 自動排程！" if is_holiday else "*依 IB-1 設計 13°C 進水條件執行。"
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{memo_2}</span></div>""", unsafe_allow_html=True)
 
-# 【V2.37 核心大升級】時段精準解析 (拆解台電電表需量)
 st.markdown("---")
 st.subheader("🎯 明日關鍵時段預報追蹤 (ECMWF 時序需量模擬)")
 if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
     h_cols = st.columns(5)
     target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
     
-    # 找出明日最大輻射值作為比例尺 (供手動模式分配太陽能用)
     max_rad_today = max([w["owm"]["hourly"][h]["rad"] for h in target_hours if h in w["owm"]["hourly"]] + [1])
 
     for i, h in enumerate(target_hours):
@@ -241,29 +247,21 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
                 h_temp = h_data['temp']
                 h_rad = h_data['rad']
                 
-                # [獨立計算該小時負載]
                 if is_holiday:
                     h_load = 160.0
                 else:
                     h_temp_penalty = max(0, (h_temp - 25.0) * 5.5)
                     h_load = true_base_load + actual_load_growth + h_temp_penalty - shaved_kw_by_cap
                 
-                # [獨立計算該小時太陽能]
+                # 【V2.38 核心】引入實測轉換公式推算各時段發電
                 if solar_mode == "🤖 API 短波輻射精準推算":
-                    if h_rad >= 500: h_eff = 0.95
-                    elif h_rad >= 350: h_eff = 0.70
-                    elif h_rad >= 150: h_eff = 0.40
-                    else: h_eff = 0.15
-                    h_solar = SOLAR_MAX_KW * h_eff
+                    h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0)
                 else:
-                    # 手動模式：依據輻射比例，畫出完美的物理鐘型曲線
                     weight = h_rad / max_rad_today if max_rad_today > 0 else 0
                     h_solar = min(manual_solar, manual_solar * weight)
                 
-                # [計算該小時台電實切需量]
                 h_net = h_load - h_solar
                 
-                # UI 渲染
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
                 
@@ -296,7 +294,7 @@ c4.metric("🔥 園區總負載最高點", f"{final_predicted_demand:.1f} kW", "
 st.markdown("**▶ 步驟二：對決台電契約容量 (扣除太陽能綠電)**")
 c5, c6, c7, c8 = st.columns(4)
 c5.metric("🔥 園區總負載最高點", f"{final_predicted_demand:.1f} kW", "來源於步驟一", delta_color="off")
-solar_metric_label = "🌞 太陽能發電折抵 (廠務手動)" if solar_mode == "✋ 廠務手動強制設定" else f"🌞 太陽能發電折抵 (ECMWF 輻射)"
+solar_metric_label = "🌞 太陽能發電折抵 (廠務手動)" if solar_mode == "✋ 廠務手動強制設定" else f"🌞 太陽能發電折抵 (實測大數據轉換)"
 c6.metric(solar_metric_label, f"-{est_solar:.1f} kW", "抵銷電網用電", delta_color="normal")
 c7.metric("⚡ 預估單日最高需量", f"{net_grid_demand:.1f} kW", "作為儲冰防禦的最高標準", delta_color="inverse")
 c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
