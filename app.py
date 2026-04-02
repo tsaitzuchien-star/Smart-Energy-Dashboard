@@ -7,7 +7,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.31", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.33", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -29,7 +29,8 @@ MAG_CHILLER_RT = 200.0
 MAG_CAP_LIMIT = 0.70         
 MAG_EFF = 0.7                
 
-SOLAR_MAX_KW = 146.0         
+SOLAR_MAX_KW = 138.0         
+
 now_dt = datetime.now(TW_TZ)
 current_month = now_dt.month
 CONTRACT_LIMIT, season_tag = (452.0, "夏月") if 6 <= current_month <= 9 else (516.0, "非夏月")
@@ -38,22 +39,24 @@ base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
     st.header("⚙️ 系統與營運參數")
-    primary_brain = st.radio("大腦決策來源", ["🇩🇪 國際開源氣象 (園區座標)", "🇹🇼 台灣氣象署 (南投縣)"])
+    primary_brain = st.radio("氣象大腦來源", ["🇪🇺 歐洲 ECMWF 輻射預測 (最準確)", "🇹🇼 台灣氣象署 (南投縣)"])
     
     st.markdown("---")
-    st.header("🏢 動態負載微調 (老闆建議)")
-    # 【V2.31 新增】進駐率拉桿
+    st.header("🌞 太陽能預測校正")
+    solar_mode = st.radio("太陽能預估模式", ["🤖 API 短波輻射精準推算", "✋ 廠務手動強制設定"], help="歐洲 ECMWF 模式會抓取短波輻射(W/m²)來無視薄雲干擾。")
+    if solar_mode == "✋ 廠務手動強制設定":
+        manual_solar = st.slider("手動設定明日太陽能 (kW)", min_value=0.0, max_value=SOLAR_MAX_KW, value=80.0, step=1.0)
+    
+    st.markdown("---")
+    st.header("🏢 動態負載微調")
     occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=70, step=5)
     actual_load_growth = 70.0 * (occupancy_rate / 100.0)
     
-    # 【V2.31 新增】磁浮耗電補償拉桿 (釐清 60kW 誤會)
-    st.caption("去年 1~5 月無磁浮主機，需補償『今年磁浮主機』的預估耗電：")
     chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     ice_restoration_kw = chiller_compensation if 1 <= current_month <= 5 else 0.0
     true_base_load = base_load_historical + ice_restoration_kw
 
     st.markdown("---")
-    st.header("🔄 資料同步控制")
     if st.button("🔄 強制同步最新氣象", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -67,52 +70,54 @@ def wmo_to_text(wmo):
     elif wmo >= 95: return "雷陣雨"
     return "未知"
 
-# --- 3. 氣象抓取 ---
+# --- 3. 氣象抓取 (V2.33 升級歐洲 ECMWF 與短波輻射) ---
 @st.cache_data(ttl=300) 
 def get_dual_weather():
     fetch_time = datetime.now(TW_TZ).strftime('%Y-%m-%d %H:%M:%S')
-    res_dict = {"fetch_time": fetch_time, "cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30}, "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "hourly": {}}}
+    res_dict = {"fetch_time": fetch_time, "cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400}, "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400, "hourly": {}}}
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     try:
         lat, lon = "23.936537", "120.697917"
-        om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,weather_code&hourly=temperature_2m,cloud_cover,weather_code&timezone=Asia%2FTaipei"
+        # 【核心升級】指定 models=ecmwf_ifs (歐洲中期預報) 並抓取 shortwave_radiation (短波輻射)
+        om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
         r = requests.get(om_url, timeout=5).json()
         res_dict["owm"]["status"] = "🟢"
         res_dict["owm"]["wx"] = wmo_to_text(r['current']['weather_code'])
         res_dict["owm"]["cloud"] = r['current']['cloud_cover']
+        res_dict["owm"]["rad"] = r['current']['shortwave_radiation']
         res_dict["owm"]["temp"] = r['current']['temperature_2m']
+        
         target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
         times_list = r['hourly']['time']
         for hour in target_hours:
             t_str = f"{tmr_prefix}T{hour}"
             if t_str in times_list:
                 idx = times_list.index(t_str)
-                res_dict["owm"]["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "cloud": r['hourly']['cloud_cover'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
+                res_dict["owm"]["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "cloud": r['hourly']['cloud_cover'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
+        
         try:
             tmr_temps = [r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)]
             res_dict["owm"]["tmr_temp"] = max(tmr_temps)
         except:
             res_dict["owm"]["tmr_temp"] = res_dict["owm"]["hourly"].get("12:00", {}).get("temp", 28.0)
+            
         try:
             tmr_clouds = [r['hourly']['cloud_cover'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]
             res_dict["owm"]["tmr_cloud"] = int(sum(tmr_clouds) / len(tmr_clouds))
+            # 抓取明日白天平均短波輻射 (W/m²)
+            tmr_rads = [r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]
+            res_dict["owm"]["tmr_rad"] = int(sum(tmr_rads) / len(tmr_rads))
         except:
             res_dict["owm"]["tmr_cloud"] = res_dict["owm"]["cloud"]
-    except: pass
-    try:
-        cwa_url = f"https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization=CWA-3DD5DB13-517F-4C53-8A1C-0D2FB1595975&locationName=南投縣"
-        r = requests.get(cwa_url, verify=False, timeout=5).json()
-        wx = r['records']['location'][0]['weatherElement'][0]['time'][0]['parameter']['parameterName']
-        res_dict["cwa"]["status"] = "🟢"
-        res_dict["cwa"]["wx"] = wx
-        res_dict["cwa"]["cloud"] = 30 if "晴" in wx else 70
-        res_dict["cwa"]["tmr_cloud"] = res_dict["cwa"]["cloud"]
+            res_dict["owm"]["tmr_rad"] = res_dict["owm"]["rad"]
     except: pass
     return res_dict
 
 w = get_dual_weather()
-sel = w["owm"] if "國際" in primary_brain and w["owm"]["status"] == "🟢" else w["cwa"]
-cloud, temp, tmr_temp, tmr_cloud = sel["cloud"], sel["temp"], sel["tmr_temp"], sel["tmr_cloud"]
+sel = w["owm"] if "歐洲" in primary_brain and w["owm"]["status"] == "🟢" else w["cwa"]
+cloud, temp, tmr_temp, tmr_cloud = sel.get("cloud",0), sel.get("temp",25), sel.get("tmr_temp",25), sel.get("tmr_cloud",30)
+current_rad = sel.get("rad", 0)
+tmr_rad = sel.get("tmr_rad", 400)
 
 with st.sidebar:
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
@@ -124,8 +129,18 @@ shaved_kw_by_cap = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
 raw_predicted_demand = true_base_load + actual_load_growth + temp_penalty
 final_predicted_demand = raw_predicted_demand - shaved_kw_by_cap
 
-solar_eff = 0.95 if tmr_cloud < 15 else 0.60 if tmr_cloud < 40 else 0.30 if tmr_cloud < 75 else 0.15
-est_solar = SOLAR_MAX_KW * solar_eff
+# 【V2.33 核心】用「輻射值 W/m²」取代雲量來推算太陽能效率
+if solar_mode == "🤖 API 短波輻射精準推算":
+    # 台灣日照極佳時平均輻射約 600~800 W/m²。用輻射值換算效率，徹底無視薄雲干擾。
+    if tmr_rad >= 500: solar_eff = 0.95
+    elif tmr_rad >= 350: solar_eff = 0.70
+    elif tmr_rad >= 150: solar_eff = 0.40
+    else: solar_eff = 0.15
+    est_solar = SOLAR_MAX_KW * solar_eff
+    solar_ui_label = f"↑ 依 ECMWF 短波輻射 {tmr_rad} W/m² 計算"
+else:
+    est_solar = manual_solar
+    solar_ui_label = "↑ ✋ 廠務手動強制校正"
 
 net_grid_demand = final_predicted_demand - est_solar
 buffer = 15.0
@@ -148,12 +163,12 @@ start_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
 end_time_str = "07:00"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.31")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.33")
 
 if suggested_ice_hrs <= 2:
-    action_msg = f"🟢 預估台電需量 {net_grid_demand:.1f} kW，低於契約容量！太陽能與磁浮封印奏效，執行例行儲冰即可。"
+    action_msg = f"🟢 預估台電需量 {net_grid_demand:.1f} kW，低於契約容量！綠電與降載奏效，執行例行儲冰即可。"
 elif suggested_ice_hrs <= 5:
-    action_msg = f"🟡 預估台電需量 {net_grid_demand:.1f} kW 逼近警戒！需補充磁浮 70% 封印缺口，請儲冰 {suggested_ice_hrs:.1f} 小時。"
+    action_msg = f"🟡 預估台電需量 {net_grid_demand:.1f} kW 逼近警戒！需補充 70% 封印缺口，請儲冰 {suggested_ice_hrs:.1f} 小時。"
 else:
     action_msg = f"🔴 警告：台電需量暴增至 {net_grid_demand:.1f} kW！務必完成 {suggested_ice_hrs:.1f} 小時長時間儲冰，嚴防超約！"
 
@@ -165,7 +180,7 @@ with c_action:
     st.markdown(f"""<div class="ice-card" style="border: 4px solid {border_color};"><div style="font-size: 24px; color: #666; font-weight: bold; margin-bottom: 10px;">建議今晚儲冰時間</div><div><span class="ice-value">{suggested_ice_hrs:.1f}</span><span class="ice-unit">小時</span></div></div>""", unsafe_allow_html=True)
 
 with c_metrics:
-    st.markdown(f"""<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 15px; height: 100%; align-content: center;"><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區氣溫</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 即時微氣候觀測</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區雲量</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{cloud} <span style="font-size: 20px; color: #555;">%</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 影響現在發電</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日預測最高溫 (防禦基準)</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{tmr_temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #ffeaea; color: #dc3545; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {tmr_temp-25:.1f} °C (高溫熱負荷)</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日太陽能發電估值</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{est_solar:.1f} <span style="font-size: 20px; color: #555;">kW</span></div><div style="display: inline-block; background: #e6f4ea; color: #28a745; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 依據明日 {tmr_cloud}% 雲量計算</div></div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px 15px; height: 100%; align-content: center;"><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前園區氣溫</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 即時微氣候觀測</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">目前短波輻射強度</div><div style="font-size: 45px; font-weight: 700; color: #d35400; line-height: 1.1;">{current_rad} <span style="font-size: 20px; color: #555;">W/m²</span></div><div style="display: inline-block; background: #f0f2f6; color: #666; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ 無視薄雲干擾之真實日照</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日預測最高溫 (防禦基準)</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{tmr_temp} <span style="font-size: 20px; color: #555;">°C</span></div><div style="display: inline-block; background: #ffeaea; color: #dc3545; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">↑ {tmr_temp-25:.1f} °C (高溫熱負荷)</div></div><div><div style="font-size: 15px; color: #555; margin-bottom: 4px;">明日太陽能發電估值</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50; line-height: 1.1;">{est_solar:.1f} <span style="font-size: 20px; color: #555;">kW</span></div><div style="display: inline-block; background: #e6f4ea; color: #28a745; padding: 2px 8px; border-radius: 10px; font-size: 13px; margin-top: 6px;">{solar_ui_label}</div></div></div>""", unsafe_allow_html=True)
 
 st.markdown(f'<div class="action-call">{action_msg}</div>', unsafe_allow_html=True)
 
@@ -178,7 +193,7 @@ with sc2:
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程 (Ice Melting)</b><br><br>啟動：<span class="schedule-time">10:00</span><br>停止：<span class="schedule-time">16:00</span><br><br><span style="font-size:16px; color:#666;">*依 IB-1 設計 13°C 進水條件執行。</span></div>""", unsafe_allow_html=True)
 
 st.markdown("---")
-st.subheader("🎯 明日關鍵時段預報追蹤")
+st.subheader("🎯 明日關鍵時段預報追蹤 (ECMWF 歐洲中期預報)")
 if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
     h_cols = st.columns(5)
     target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
@@ -189,7 +204,8 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
                 h_data = w["owm"]["hourly"][h]
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ **{h_data['temp']} °C**")
-                st.progress(h_data['cloud'] / 100, text=f"☁️ 雲量 {h_data['cloud']}%")
+                # 【改版】視覺化顯示輻射強度
+                st.progress(min(1.0, h_data['rad'] / 1000.0), text=f"☀️ 輻射 {h_data['rad']} W/m²")
             else: st.write("資料擷取中...")
 
 st.markdown("---")
@@ -205,7 +221,10 @@ c4.metric("🔥 園區總負載預測", f"{final_predicted_demand:.1f} kW", "建
 st.markdown("**▶ 步驟二：對決台電契約容量 (扣除太陽能綠電)**")
 c5, c6, c7, c8 = st.columns(4)
 c5.metric("🔥 園區總負載預測", f"{final_predicted_demand:.1f} kW", "來源於步驟一", delta_color="off")
-c6.metric("🌞 太陽能發電折抵", f"-{est_solar:.1f} kW", f"依 {tmr_cloud}% 雲量預估", delta_color="normal")
+
+solar_metric_label = "🌞 太陽能發電折抵 (廠務手動)" if solar_mode == "✋ 廠務手動強制設定" else f"🌞 太陽能發電折抵 (ECMWF 輻射預測)"
+c6.metric(solar_metric_label, f"-{est_solar:.1f} kW", "抵銷電網用電", delta_color="normal")
+
 c7.metric("⚡ 預估台電電表需量", f"{net_grid_demand:.1f} kW", "實際向台電買電量", delta_color="inverse")
 c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
