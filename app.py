@@ -280,7 +280,7 @@ with sc1:
         </div>
     """, unsafe_allow_html=True)
 with sc2:
-    memo_2 = "*明日為假日，務必手動關閉 1-5 自動排程！" if is_holiday else "*依 IB-1 設計 13°C 進水條件執行。"
+    memo_2 = "*明日為假日，務必手動關閉空調自動排程！" if is_holiday else "*依 IB-1 設計 13°C 進水條件執行。"
     st.markdown(f"""
         <div class="schedule-box">
             <b>💧 日間融冰排程 (Ice Melting)</b><br><br>
