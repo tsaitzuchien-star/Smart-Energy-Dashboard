@@ -7,7 +7,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.40", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.41", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -130,12 +130,11 @@ w = get_dual_weather()
 sel = w["owm"] if "歐洲" in primary_brain and w["owm"]["status"] == "🟢" else w["cwa"]
 cloud, temp, tmr_temp = sel.get("cloud",0), sel.get("temp",25), sel.get("tmr_temp",25)
 current_rad = sel.get("rad", 0)
-tmr_rad = sel.get("tmr_rad", 400)
 
 with st.sidebar:
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 明日儲冰決策大腦 ---
+# --- 4. 【V2.41 重構】找出真實「最嚴苛時段」的台電需量 ---
 if tmr_is_holiday:
     tmr_true_base_load = 160.0
     tmr_actual_load_growth = 0.0
@@ -148,19 +147,50 @@ else:
     tmr_temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
     tmr_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
 
+# 這是全日最顛峰的絕對負載 (僅供步驟一展示用)
 final_predicted_demand = tmr_true_base_load + tmr_actual_load_growth + tmr_temp_penalty - tmr_shaved_kw
 
-if solar_mode == "🤖 API 短波輻射精準推算":
-    solar_eff = min(1.0, tmr_rad / 1000.0)
-    est_solar = SOLAR_MAX_KW * solar_eff
-    solar_ui_label = f"↑ 實測大數據轉換 (輻射 {tmr_rad} W/m²)"
+# [核心破解] 逐時段交戰模擬，尋找真正的「最高需量點」
+max_net_grid_demand = 0.0
+worst_hour = "未知"
+worst_hour_load = 0.0
+worst_hour_solar = 0.0
+
+if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
+    target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
+    max_rad_tmr = max([w["owm"]["hourly"][h]["rad"] for h in target_hours if h in w["owm"]["hourly"]] + [1])
+    
+    for h in target_hours:
+        if h in w["owm"]["hourly"]:
+            h_temp = w["owm"]["hourly"][h]['temp']
+            h_rad = w["owm"]["hourly"][h]['rad']
+            
+            if tmr_is_holiday:
+                h_load = 160.0
+            else:
+                h_load = tmr_true_base_load + tmr_actual_load_growth + max(0, (h_temp - 25.0) * 5.5) - tmr_shaved_kw
+            
+            if solar_mode == "🤖 API 短波輻射精準推算":
+                h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0)
+            else:
+                weight = h_rad / max_rad_tmr if max_rad_tmr > 0 else 0
+                h_solar = min(manual_solar, manual_solar * weight)
+            
+            h_net = h_load - h_solar
+            
+            # 抓出最慘烈的那一小時！
+            if h_net > max_net_grid_demand:
+                max_net_grid_demand = h_net
+                worst_hour = h
+                worst_hour_load = h_load
+                worst_hour_solar = h_solar
 else:
-    est_solar = manual_solar
-    solar_ui_label = "↑ ✋ 廠務手動巔峰校正"
+    # 預防 API 失敗的保守備案
+    max_net_grid_demand = final_predicted_demand - (SOLAR_MAX_KW * 0.5)
+    worst_hour = "14:00 (預設)"
 
-net_grid_demand = final_predicted_demand - est_solar
-demand_gap = net_grid_demand - (CONTRACT_LIMIT - 15.0)
-
+# 以「最慘需量」作為儲備防禦的唯一標準
+demand_gap = max_net_grid_demand - (CONTRACT_LIMIT - 15.0)
 needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
 extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0 if not tmr_is_holiday else 0.0
 
@@ -179,17 +209,16 @@ else:
     time_color = "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.40")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.41")
 
-# 【文字修正】製冰 -> 儲冰
 if tmr_is_holiday:
     action_msg = f"🎉 假日停機警報：明日 ({tmr_str}) 為休息日/補假！請【暫停今晚儲冰】，並手動解除排程。"
 elif suggested_ice_hrs <= 2:
-    action_msg = f"🟢 預估明日最高需量 {net_grid_demand:.1f} kW，電力餘裕充足，執行例行儲冰即可。"
+    action_msg = f"🟢 明日最危險時段需量 {max_net_grid_demand:.1f} kW，電力餘裕充足，執行例行儲冰即可。"
 elif suggested_ice_hrs <= 5:
-    action_msg = f"🟡 預估明日最高需量 {net_grid_demand:.1f} kW 逼近警戒！需補充 70% 封印缺口，請加強儲冰。"
+    action_msg = f"🟡 明日最危險時段需量 {max_net_grid_demand:.1f} kW 逼近警戒！需補充 70% 封印缺口，請加強儲冰。"
 else:
-    action_msg = f"🔴 警告：明日需量暴增至 {net_grid_demand:.1f} kW！嚴防午後超約，務必完成長時間儲冰！"
+    action_msg = f"🔴 警告：明日危險時段需量暴增至 {max_net_grid_demand:.1f} kW！嚴防午後超約，務必長時間儲冰！"
 
 st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 c_action, c_metrics = st.columns([1.2, 1])
@@ -208,7 +237,7 @@ with c_metrics:
             <div><div style="font-size: 15px; color: #555;">目前園區氣溫</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50;">{temp} <span style="font-size: 20px;">°C</span></div></div>
             <div><div style="font-size: 15px; color: #555;">目前短波輻射強度</div><div style="font-size: 45px; font-weight: 700; color: #d35400;">{current_rad} <span style="font-size: 20px;">W/m²</span></div></div>
             <div><div style="font-size: 15px; color: #555;">明日預測最高溫</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50;">{tmr_temp} <span style="font-size: 20px;">°C</span></div></div>
-            <div><div style="font-size: 15px; color: #555;">明日平均太陽能估值</div><div style="font-size: 45px; font-weight: 700; color: #2c3e50;">{est_solar:.1f} <span style="font-size: 20px;">kW</span></div><div style="font-size: 13px; color:#28a745;">{solar_ui_label}</div></div>
+            <div><div style="font-size: 15px; color: #555;">最危險時段 ({worst_hour})</div><div style="font-size: 45px; font-weight: 700; color: #dc3545;">{max_net_grid_demand:.1f} <span style="font-size: 20px;">kW</span></div><div style="font-size: 13px; color:#dc3545;">↑ 真實最大防禦挑戰</div></div>
         </div>
     """, unsafe_allow_html=True)
 
@@ -222,7 +251,6 @@ with sc1:
     memo_1 = "*明日為假日，無需儲冰備戰。" if tmr_is_holiday else "*已包含填補磁浮 70% 封印所需之額外冰量。"
     st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間儲冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
 with sc2:
-    # 【文字修正】關閉 1-5 自動排程 -> 關閉空調自動排程
     memo_2 = "*明日為假日，務必手動關閉空調自動排程！" if tmr_is_holiday else "*依 IB-1 設計 13°C 進水條件執行。"
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{memo_2}</span></div>""", unsafe_allow_html=True)
 
@@ -316,9 +344,9 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
                 st.write("資料擷取中...")
 
 st.markdown("---")
-st.subheader("📊 明日整體最高點防禦決策基礎")
+st.subheader("📊 明日防禦決策基準：聚焦最嚴苛時段 (破除鴨子曲線陷阱)")
 
-st.markdown("**▶ 步驟一：園區建築物日最高耗能推算**")
+st.markdown("**▶ 步驟一：園區建築物絕對最高耗能推算 (忽視太陽能)**")
 c1, c2, c3, c4 = st.columns(4)
 if tmr_is_holiday:
     c1.metric("非上班日基礎負載", f"{tmr_true_base_load:.1f} kW", "實測假日基本待機用電", delta_color="off")
@@ -327,13 +355,14 @@ else:
     c1.metric("歷史基礎與動態加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"依進駐率 {occupancy_rate}% 計算", delta_color="off")
     c2.metric("🌡️ 高溫熱負荷加載", f"+{tmr_temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C")
 c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
-c4.metric("🔥 園區總負載最高點", f"{final_predicted_demand:.1f} kW", "建築物實際消耗最高峰", delta_color="off")
+c4.metric("🔥 園區絕對最高負載", f"{final_predicted_demand:.1f} kW", "冷氣全開的物理極限", delta_color="off")
 
-st.markdown("**▶ 步驟二：對決台電契約容量 (扣除太陽能綠電)**")
+# 【V2.41 核心改造】只對決「最嚴苛時段」，不再用假象的顛峰太陽能抵扣
+st.markdown(f"**▶ 步驟二：對決台電契約容量 (鎖定最危險的 {worst_hour} 進行真實防禦)**")
 c5, c6, c7, c8 = st.columns(4)
-c5.metric("🔥 園區總負載最高點", f"{final_predicted_demand:.1f} kW", "來源於步驟一", delta_color="off")
-c6.metric(solar_ui_label, f"-{est_solar:.1f} kW", "抵銷電網用電", delta_color="normal")
-c7.metric("⚡ 預估單日最高需量", f"{net_grid_demand:.1f} kW", "作為儲備防禦的最高標準", delta_color="inverse")
+c5.metric(f"🔥 {worst_hour} 預估負載", f"{worst_hour_load:.1f} kW", "該時段之建築耗能", delta_color="off")
+c6.metric(f"📉 {worst_hour} 太陽能殘值", f"-{worst_hour_solar:.1f} kW", "太陽偏西或雲層遮蔽後之發電量", delta_color="normal")
+c7.metric("⚡ 真實最高台電需量", f"{max_net_grid_demand:.1f} kW", "作為儲冰防禦的唯一標準", delta_color="inverse")
 c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
 st.markdown(f"系統運行中 | 氣象大腦同步時間：{w['fetch_time']} | 設備參數：BCU-1(儲冰主機) & IB-1(2500RT-HR)")
