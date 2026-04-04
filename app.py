@@ -7,7 +7,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.41", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.42", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -19,6 +19,7 @@ st.markdown("""
     .schedule-time { font-size: 32px; font-weight: bold; }
     .hourly-card { background-color: #f8f9fa; padding: 12px; border-radius: 8px; margin-top: 10px; box-shadow: 1px 1px 5px rgba(0,0,0,0.05); }
     .hourly-card-today { background-color: #f0f8ff; padding: 12px; border-radius: 8px; margin-top: 10px; box-shadow: 1px 1px 5px rgba(0,0,0,0.05); border-left: 4px solid #17a2b8; }
+    .cloud-badge { font-size:11px; background:#e2e8f0; color:#495057; padding:3px 6px; border-radius:6px; text-align:center; margin-bottom:6px; letter-spacing:0.5px;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -80,17 +81,21 @@ tmr_is_holiday = tmr_dt.weekday() >= 5 or tmr_str in TAIWAN_HOLIDAYS_2026
 @st.cache_data(ttl=300) 
 def get_dual_weather():
     fetch_time = datetime.now(TW_TZ).strftime('%Y-%m-%d %H:%M:%S')
-    res_dict = {"fetch_time": fetch_time, "cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400}, "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400, "today_hourly": {}, "hourly": {}}}
+    res_dict = {"fetch_time": fetch_time, "cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400}, "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400, "cloud_low": 0, "cloud_mid": 0, "cloud_high": 0, "today_hourly": {}, "hourly": {}}}
     
     today_prefix = datetime.now(TW_TZ).strftime("%Y-%m-%d")
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     try:
         lat, lon = "23.936537", "120.697917"
-        om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
+        # 【V2.42 核心解鎖】加入 cloud_cover_low, cloud_cover_mid, cloud_cover_high
+        om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
         r = requests.get(om_url, timeout=5).json()
         res_dict["owm"]["status"] = "🟢"
         res_dict["owm"]["wx"] = wmo_to_text(r['current']['weather_code'])
         res_dict["owm"]["cloud"] = r['current']['cloud_cover']
+        res_dict["owm"]["cloud_low"] = r['current']['cloud_cover_low']
+        res_dict["owm"]["cloud_mid"] = r['current']['cloud_cover_mid']
+        res_dict["owm"]["cloud_high"] = r['current']['cloud_cover_high']
         res_dict["owm"]["rad"] = r['current']['shortwave_radiation']
         res_dict["owm"]["temp"] = r['current']['temperature_2m']
         
@@ -101,13 +106,27 @@ def get_dual_weather():
             t_str_today = f"{today_prefix}T{hour}"
             if t_str_today in times_list:
                 idx = times_list.index(t_str_today)
-                res_dict["owm"]["today_hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "cloud": r['hourly']['cloud_cover'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
+                res_dict["owm"]["today_hourly"][hour] = {
+                    "temp": r['hourly']['temperature_2m'][idx], 
+                    "rad": r['hourly']['shortwave_radiation'][idx], 
+                    "c_low": r['hourly']['cloud_cover_low'][idx],
+                    "c_mid": r['hourly']['cloud_cover_mid'][idx],
+                    "c_high": r['hourly']['cloud_cover_high'][idx],
+                    "wx": wmo_to_text(r['hourly']['weather_code'][idx])
+                }
                 
         for hour in target_hours:
             t_str_tmr = f"{tmr_prefix}T{hour}"
             if t_str_tmr in times_list:
                 idx = times_list.index(t_str_tmr)
-                res_dict["owm"]["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "cloud": r['hourly']['cloud_cover'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
+                res_dict["owm"]["hourly"][hour] = {
+                    "temp": r['hourly']['temperature_2m'][idx], 
+                    "rad": r['hourly']['shortwave_radiation'][idx], 
+                    "c_low": r['hourly']['cloud_cover_low'][idx],
+                    "c_mid": r['hourly']['cloud_cover_mid'][idx],
+                    "c_high": r['hourly']['cloud_cover_high'][idx],
+                    "wx": wmo_to_text(r['hourly']['weather_code'][idx])
+                }
         
         try:
             tmr_temps = [r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)]
@@ -115,14 +134,6 @@ def get_dual_weather():
         except:
             res_dict["owm"]["tmr_temp"] = res_dict["owm"]["hourly"].get("12:00", {}).get("temp", 28.0)
             
-        try:
-            tmr_clouds = [r['hourly']['cloud_cover'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]
-            res_dict["owm"]["tmr_cloud"] = int(sum(tmr_clouds) / len(tmr_clouds))
-            tmr_rads = [r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]
-            res_dict["owm"]["tmr_rad"] = int(sum(tmr_rads) / len(tmr_rads))
-        except:
-            res_dict["owm"]["tmr_cloud"] = res_dict["owm"]["cloud"]
-            res_dict["owm"]["tmr_rad"] = res_dict["owm"]["rad"]
     except: pass
     return res_dict
 
@@ -132,9 +143,19 @@ cloud, temp, tmr_temp = sel.get("cloud",0), sel.get("temp",25), sel.get("tmr_tem
 current_rad = sel.get("rad", 0)
 
 with st.sidebar:
-    st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦最後同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
+    st.markdown("---")
+    st.header("☁️ 即時天空剖析 (ECMWF)")
+    if "歐洲" in primary_brain and w["owm"]["status"] == "🟢":
+        st.progress(w["owm"]["cloud_low"] / 100.0, text=f"🌫️ 低雲層 (發電殺手): {w['owm']['cloud_low']}%")
+        st.progress(w["owm"]["cloud_mid"] / 100.0, text=f"☁️ 中雲層 (微弱影響): {w['owm']['cloud_mid']}%")
+        st.progress(w["owm"]["cloud_high"] / 100.0, text=f"🌤️ 高雲層 (陽光穿透): {w['owm']['cloud_high']}%")
+        st.caption("高空卷雲不影響短波輻射，低空烏雲則會阻斷太陽能。")
+    else:
+        st.write("⚠️ 目前非 ECMWF 模式，無法顯示三層雲量。")
+        
+    st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 【V2.41 重構】找出真實「最嚴苛時段」的台電需量 ---
+# --- 4. 決策大腦 ---
 if tmr_is_holiday:
     tmr_true_base_load = 160.0
     tmr_actual_load_growth = 0.0
@@ -147,10 +168,8 @@ else:
     tmr_temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
     tmr_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
 
-# 這是全日最顛峰的絕對負載 (僅供步驟一展示用)
 final_predicted_demand = tmr_true_base_load + tmr_actual_load_growth + tmr_temp_penalty - tmr_shaved_kw
 
-# [核心破解] 逐時段交戰模擬，尋找真正的「最高需量點」
 max_net_grid_demand = 0.0
 worst_hour = "未知"
 worst_hour_load = 0.0
@@ -178,18 +197,15 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
             
             h_net = h_load - h_solar
             
-            # 抓出最慘烈的那一小時！
             if h_net > max_net_grid_demand:
                 max_net_grid_demand = h_net
                 worst_hour = h
                 worst_hour_load = h_load
                 worst_hour_solar = h_solar
 else:
-    # 預防 API 失敗的保守備案
     max_net_grid_demand = final_predicted_demand - (SOLAR_MAX_KW * 0.5)
     worst_hour = "14:00 (預設)"
 
-# 以「最慘需量」作為儲備防禦的唯一標準
 demand_gap = max_net_grid_demand - (CONTRACT_LIMIT - 15.0)
 needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
 extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0 if not tmr_is_holiday else 0.0
@@ -209,7 +225,7 @@ else:
     time_color = "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.41")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.42")
 
 if tmr_is_holiday:
     action_msg = f"🎉 假日停機警報：明日 ({tmr_str}) 為休息日/補假！請【暫停今晚儲冰】，並手動解除排程。"
@@ -273,6 +289,7 @@ if "🟢" in w["owm"]["status"] and w["owm"]["today_hourly"]:
             if h in w["owm"]["today_hourly"]:
                 h_data = w["owm"]["today_hourly"][h]
                 h_temp, h_rad = h_data['temp'], h_data['rad']
+                c_low, c_mid, c_high = h_data.get('c_low',0), h_data.get('c_mid',0), h_data.get('c_high',0)
                 
                 if today_is_holiday:
                     h_load = 160.0
@@ -293,6 +310,7 @@ if "🟢" in w["owm"]["status"] and w["owm"]["today_hourly"]:
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
                 st.markdown(f"""
                     <div class="hourly-card-today" style="border-left-color: {card_color};">
+                        <div class="cloud-badge">☁️ 雲分布 (低/中/高)<br><b>{c_low}% / {c_mid}% / {c_high}%</b></div>
                         <div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div>
                         <div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div>
                         <hr style="margin:6px 0; border: 0.5px solid #b8daff;">
@@ -314,6 +332,7 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
             if h in w["owm"]["hourly"]:
                 h_data = w["owm"]["hourly"][h]
                 h_temp, h_rad = h_data['temp'], h_data['rad']
+                c_low, c_mid, c_high = h_data.get('c_low',0), h_data.get('c_mid',0), h_data.get('c_high',0)
                 
                 if tmr_is_holiday:
                     h_load = 160.0
@@ -334,6 +353,7 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
                 st.markdown(f"""
                     <div class="hourly-card" style="border-left: 4px solid {card_color};">
+                        <div class="cloud-badge">☁️ 雲分布 (低/中/高)<br><b>{c_low}% / {c_mid}% / {c_high}%</b></div>
                         <div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div>
                         <div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div>
                         <hr style="margin:6px 0; border: 0.5px solid #ddd;">
@@ -344,7 +364,7 @@ if "🟢" in w["owm"]["status"] and w["owm"]["hourly"]:
                 st.write("資料擷取中...")
 
 st.markdown("---")
-st.subheader("📊 明日防禦決策基準：聚焦最嚴苛時段 (破除鴨子曲線陷阱)")
+st.subheader("📊 明日防禦決策基準：聚焦最嚴苛時段")
 
 st.markdown("**▶ 步驟一：園區建築物絕對最高耗能推算 (忽視太陽能)**")
 c1, c2, c3, c4 = st.columns(4)
@@ -357,7 +377,6 @@ else:
 c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
 c4.metric("🔥 園區絕對最高負載", f"{final_predicted_demand:.1f} kW", "冷氣全開的物理極限", delta_color="off")
 
-# 【V2.41 核心改造】只對決「最嚴苛時段」，不再用假象的顛峰太陽能抵扣
 st.markdown(f"**▶ 步驟二：對決台電契約容量 (鎖定最危險的 {worst_hour} 進行真實防禦)**")
 c5, c6, c7, c8 = st.columns(4)
 c5.metric(f"🔥 {worst_hour} 預估負載", f"{worst_hour_load:.1f} kW", "該時段之建築耗能", delta_color="off")
