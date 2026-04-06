@@ -1,0 +1,29 @@
+name: 每天18:00自動寫入戰情數據
+
+on:
+  schedule:
+    # Cron 表達式，伺服器是 UTC 時間，台灣 18:00 是 UTC 10:00
+    - cron: '0 10 * * *'
+  workflow_dispatch: # 允許手動點擊按鈕測試
+
+jobs:
+  log-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 下載程式碼
+        uses: actions/checkout@v3
+      
+      - name: 🐍 設定 Python 環境
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: 📦 安裝套件
+        run: |
+          pip install requests urllib3 gspread google-auth
+          
+      - name: 🚀 執行自動寫入腳本
+        env:
+          # 這裡會去抓我們等一下要在 GitHub 後台設定的隱藏金鑰
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python auto_log.py
