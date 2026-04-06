@@ -364,7 +364,7 @@ st.subheader("💾 戰情室大數據資料庫 (Google Sheets)")
 if not GS_AVAILABLE:
     st.warning("⚠️ 尚未安裝資料庫套件。請在終端機執行 `pip install gspread google-auth`。")
 elif not os.path.exists("credentials.json"):
-    st.info("ℹ️ 尚未偵測到 `credentials.json` 金鑰。請將 Google Service Account 金鑰放入同一個資料夾中，並將試算表共用給金鑰內的 email 以啟動寫入功能。")
+    st.info("ℹ️數據寫入試算表功能，僅能在本機端使用，您目前在雲端版，無法使用寫入功能。")
 else:
     if st.button("📤 將今日戰情與明日預測寫入資料庫", type="primary", use_container_width=True):
         try:
