@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import urllib3
 import os
-import json
 from datetime import datetime, timedelta, timezone
 
 # 匯入 Google Sheets 所需套件
@@ -36,7 +35,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. 參數與原廠硬體規格 ---
-ICE_CHILLER_KW = 241.0        
+ICE_CHILLER_KW = 241.0       
 ICE_CHILLER_CAP_RT = 242.5   
 ICE_BANK_MAX_RTHR = 2500.0   
 
@@ -84,7 +83,7 @@ today_str = now_dt.strftime("%Y-%m-%d")
 tmr_dt = now_dt + timedelta(days=1)
 tmr_str = tmr_dt.strftime("%Y-%m-%d")
 
-TAIWAN_HOLIDAYS_2026 = ["2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-27", "2026-04-03", "2026-04-04", "2026-04-06", "2026-05-01", "2026-06-19", "2026-09-25", "2026-09-28", "2026-10-09", "2026-10-09", "2026-10-26", "2026-12-25"]
+TAIWAN_HOLIDAYS_2026 = ["2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-27", "2026-04-03", "2026-04-04", "2026-04-06", "2026-05-01", "2026-06-19", "2026-09-25", "2026-09-28", "2026-10-09", "2026-10-26", "2026-12-25"]
 today_is_holiday = now_dt.weekday() >= 5 or today_str in TAIWAN_HOLIDAYS_2026
 tmr_is_holiday = tmr_dt.weekday() >= 5 or tmr_str in TAIWAN_HOLIDAYS_2026
 
@@ -152,6 +151,7 @@ with st.sidebar:
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
 # --- 4. 決策大腦運算 ---
+# [4.1 今日決策]
 today_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 today_base_load = base_load_historical + today_ice_rest
 today_actual_load = 70.0 * (occupancy_rate / 100.0)
@@ -180,6 +180,7 @@ else:
     today_max_net = h_load - (SOLAR_MAX_KW * 0.4) 
     today_worst_hour = "斷線盲估"
 
+# [4.2 明日決策]
 if tmr_is_holiday:
     tmr_true_base_load = 160.0
     tmr_actual_load_growth = 0.0
@@ -197,8 +198,10 @@ final_predicted_demand = tmr_true_base_load + tmr_actual_load_growth + tmr_temp_
 if solar_mode == "🤖 API 短波輻射精準推算":
     solar_eff = min(1.0, tmr_rad / 1000.0)
     est_solar = SOLAR_MAX_KW * solar_eff
+    solar_ui_label = f"↑ 實測大數據轉換"
 else:
     est_solar = manual_solar
+    solar_ui_label = f"↑ ✋ 廠務手動巔峰校正"
 
 max_net_grid_demand = 0.0
 worst_hour = "未知"
@@ -287,6 +290,7 @@ with sc2:
 
 st.markdown("---")
 st.subheader(f"⚡ 今日關鍵時段即時追蹤 ({today_str} 現場比對專用)")
+
 if api_is_online:
     h_cols_today = st.columns(5)
     for i, h in enumerate(target_hours):
@@ -305,7 +309,9 @@ if api_is_online:
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
                 st.markdown(f"""<div class="hourly-card-today" style="border-left-color: {card_color};"><div class="cloud-badge"><div>☁️ 雲分布 (低/中/高)</div><div style="font-weight:bold;">{c_low}% / {c_mid}% / {c_high}%</div></div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#b8daff; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
-else: st.warning("📡 API 無法連線。")
+            else: st.write("資料擷取中...")
+else:
+    st.warning("📡 由於 API 暫時無法連線，系統已暫停繪製今日逐時雷達圖。請參考上方 6 宮格的盲估安全值，或稍後再試。")
 
 st.markdown("---")
 st.subheader(f"🎯 明日關鍵時段預報追蹤 ({tmr_str} 儲冰防禦準備)")
@@ -327,69 +333,75 @@ if api_is_online:
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
                 st.markdown(f"""<div class="hourly-card" style="border-left: 4px solid {card_color};"><div class="cloud-badge"><div>☁️ 雲分布 (低/中/高)</div><div style="font-weight:bold;">{c_low}% / {c_mid}% / {c_high}%</div></div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#ddd; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
+            else: st.write("資料擷取中...")
+else:
+    st.warning("📡 由於 API 暫時無法連線，系統已暫停繪製明日逐時雷達圖。請參考上方 6 宮格的盲估安全值，或稍後再試。")
 
 st.markdown("---")
-st.subheader("📊 明日防禦決策基準")
+st.subheader("📊 明日防禦決策基準：聚焦最嚴苛時段")
 c1, c2, c3, c4 = st.columns(4)
 if tmr_is_holiday:
-    c1.metric("假日基礎負載", f"{tmr_true_base_load:.1f} kW")
+    c1.metric("非上班日基礎負載", f"{tmr_true_base_load:.1f} kW", "實測假日基本待機用電", delta_color="off")
+    c2.metric("📈 動態與高溫加載", f"+0.0 kW", "假日無辦公空調需求")
 else:
-    c1.metric("基礎與動態加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW")
-c2.metric("🌡️ 高溫熱負荷", f"+{tmr_temp_penalty:.1f} kW")
-c3.metric("🛡️ 磁浮降載", f"-{tmr_shaved_kw:.1f} kW")
-c4.metric("🔥 絕對最高負載", f"{final_predicted_demand:.1f} kW")
+    c1.metric("歷史基礎與動態加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"依進駐率 {occupancy_rate}% 計算", delta_color="off")
+    c2.metric("🌡️ 高溫熱負荷加載", f"+{tmr_temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C")
+c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
+c4.metric("🔥 園區絕對最高負載", f"{final_predicted_demand:.1f} kW", "冷氣全開的物理極限", delta_color="off")
+
+c5, c6, c7, c8 = st.columns(4)
+c5.metric(f"🔥 {worst_hour} 預估負載", f"{worst_hour_load:.1f} kW", "該時段之建築耗能", delta_color="off")
+c6.metric(f"📉 {worst_hour} 太陽能殘值", f"-{worst_hour_solar:.1f} kW", "太陽偏西或雲層遮蔽後之發電量", delta_color="normal")
+c7.metric("⚡ 真實最高台電需量", f"{max_net_grid_demand:.1f} kW", "作為儲備防禦的最高標準", delta_color="inverse")
+c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
 # ==========================================
-# Google Sheets 大數據倉儲寫入系統 (雲端升級版)
+# Google Sheets 大數據倉儲寫入系統 (附帶智慧標題)
 # ==========================================
 st.markdown("---")
 st.subheader("💾 戰情室大數據資料庫 (Google Sheets)")
 
-# 核心連線函式：支援 Secrets 與本機檔案
-def get_gspread_client():
-    scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    try:
-        # 優先嘗試從 Streamlit Secrets 讀取 (雲端模式)
-        if "GOOGLE_CREDENTIALS" in st.secrets:
-            creds_info = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-            creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
-            return gspread.authorize(creds)
-        # 備案：嘗試從本地檔案讀取 (本機模式)
-        if os.path.exists("credentials.json"):
-            creds = Credentials.from_service_account_file('credentials.json', scopes=scopes)
-            return gspread.authorize(creds)
-        return None
-    except Exception:
-        return None
-
-client = get_gspread_client()
-
 if not GS_AVAILABLE:
     st.warning("⚠️ 尚未安裝資料庫套件。請在終端機執行 `pip install gspread google-auth`。")
-elif client is None:
-    st.info("ℹ️ 尚未偵測到有效的 Google 金鑰。請設定 Streamlit Secrets 或於本機放置 `credentials.json` 以啟動寫入功能。")
+elif not os.path.exists("credentials.json"):
+    st.info("ℹ️ 尚未偵測到 `credentials.json` 金鑰。請將 Google Service Account 金鑰放入同一個資料夾中，並將試算表共用給金鑰內的 email 以啟動寫入功能。")
 else:
     if st.button("📤 將今日戰情與明日預測寫入資料庫", type="primary", use_container_width=True):
         try:
             with st.spinner("正在連線至 Google Sheets 寫入資料..."):
+                scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+                creds = Credentials.from_service_account_file('credentials.json', scopes=scopes)
+                client = gspread.authorize(creds)
+                
                 sheet = client.open('中創園區空調戰情大數據').sheet1
+                
+                # 【V2.52 核心修復】自動檢查並補上欄位標題
                 expected_headers = [
                     "紀錄時間", "今日進駐率(%)", "今日氣溫(°C)", "今日輻射(W/m²)", 
                     "今日最危險時段", "今日最高需量(kW)", "明日預估高溫(°C)", 
                     "明日太陽能峰值(kW)", "明日最危險時段", "明日預估最高需量(kW)", "建議今晚儲冰(小時)"
                 ]
+                
                 first_row = sheet.row_values(1)
                 if not first_row:
                     sheet.append_row(expected_headers)
                 
+                # 寫入本次的預測數據
                 data_row = [
-                    w['fetch_time'], occupancy_rate, temp, current_rad, today_worst_hour, 
-                    round(today_max_net, 1), tmr_temp, round(est_solar, 1), worst_hour, 
-                    round(max_net_grid_demand, 1), round(suggested_ice_hrs, 1)
+                    w['fetch_time'],                      
+                    occupancy_rate,                       
+                    temp,                                 
+                    current_rad,                          
+                    today_worst_hour,                     
+                    round(today_max_net, 1),              
+                    tmr_temp,                             
+                    round(est_solar, 1),                  
+                    worst_hour,                           
+                    round(max_net_grid_demand, 1),        
+                    round(suggested_ice_hrs, 1)           
                 ]
                 sheet.append_row(data_row)
-                st.success(f"✅ 寫入成功！已將 {w['fetch_time']} 的戰情快照備份至雲端。")
-                st.balloons()
+                st.success(f"✅ 寫入成功！已將 {w['fetch_time']} 的戰情快照與標題備份至雲端。")
         except Exception as e:
             st.error(f"❌ 寫入失敗。錯誤細節：{e}")
 
