@@ -252,8 +252,6 @@ else:
 # --- 5. 渲染 UI ---
 st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.52")
 
-st.write("目前 Secrets 裡的 key 有哪些：", list(st.secrets.keys()))
-
 if api_is_online:
     st.markdown("<div class='status-banner-ok'>📡 系統狀態：🟢 ECMWF 衛星連線正常 (資料即時同步中)</div>", unsafe_allow_html=True)
 else:
