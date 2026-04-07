@@ -295,7 +295,7 @@ st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
 sc1, sc2 = st.columns(2)
 with sc1:
     memo_1 = "*明日為假日，無需儲冰備戰。" if tmr_is_holiday else "*已包含填補磁浮 70% 封印所需之額外冰量。"
-    st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間儲冰排程</b><br><br>啟 পণ্ডিত：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間儲冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
 with sc2:
     memo_2 = "*明日為假日，務必手動關閉空調自動排程！" if tmr_is_holiday else "*依 IB-1 設計 13°C 進水條件執行。"
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{memo_2}</span></div>""", unsafe_allow_html=True)
