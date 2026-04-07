@@ -272,7 +272,7 @@ else:
     start_time_str, end_time_str, melt_start, melt_end, time_color = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00", "10:00", "16:00", "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V3.1")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.1")
 
 if w["status_code"] == 1:
     st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 ECMWF 歐洲衛星連線正常 (主力運作中)</div>", unsafe_allow_html=True)
@@ -373,4 +373,4 @@ c7.metric("⚡ 真實最高台電需量", f"{max_net_grid_demand:.1f} kW", delta
 c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW")
 
 st.markdown("---")
-st.markdown(f"<div style='text-align: center; color: #666;'>系統運行中 | 氣象更新時間：{w['fetch_time']} | 設備參數：BCU-1 & IB-1</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='text-align: center; color: #666;'>系統運行中 | 氣象更新時間：{w['fetch_time']} | 設備參數：CHU-2(磁浮冰機) & BCU-1(儲冰主機) & IB-1(2500RT-HR)</div>", unsafe_allow_html=True)
