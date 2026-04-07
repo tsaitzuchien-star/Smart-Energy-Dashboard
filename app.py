@@ -265,12 +265,12 @@ else:
     time_color = "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V3.0")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.0")
 
 if api_is_online:
-    st.markdown("<div class='status-banner-ok'>📡 系統狀態：🟢 專屬金鑰連線成功 (VC 企業級氣象同步中)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='status-banner-ok'>📡 系統狀態：🟢 連線成功 (VC 企業級氣象同步中)</div>", unsafe_allow_html=True)
 else:
-    st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 等待金鑰輸入 (請確認 Streamlit Secrets 設定)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 連線失敗 (請確認 Streamlit Secrets 設定)</div>", unsafe_allow_html=True)
 
 if tmr_is_holiday:
     action_msg = f"🎉 假日停機警報：明日 ({tmr_str}) 為休息日/補假！請【暫停今晚儲冰】，並手動解除排程。"
