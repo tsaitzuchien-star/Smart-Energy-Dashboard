@@ -4,19 +4,12 @@ import urllib3
 import os
 from datetime import datetime, timedelta, timezone
 
-# 匯入 Google Sheets 所需套件
-try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-    GS_AVAILABLE = True
-except ImportError:
-    GS_AVAILABLE = False
-
+# 關閉不安全的請求警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區電力契約容量暨空調聯防戰情室 V2.52", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V2.52", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -93,10 +86,26 @@ def get_dual_weather():
     res_dict = {"fetch_time": fetch_time, "cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400}, "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400, "cloud_low": 0, "cloud_mid": 0, "cloud_high": 0, "today_hourly": {}, "hourly": {}}}
     today_prefix = datetime.now(TW_TZ).strftime("%Y-%m-%d")
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
+    
     try:
         lat, lon = "23.936537", "120.697917"
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
-        r = requests.get(om_url, timeout=5).json()
+        
+        # --- 增強版連線設定開始 (解決斷線問題) ---
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        
+        session = requests.Session()
+        # 設定重試 3 次，遇到壅塞時自動退避等待
+        retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        
+        # 將容忍時間拉長至 15 秒
+        r = session.get(om_url, timeout=15).json()
+        # --- 增強版連線設定結束 ---
+
         res_dict["owm"]["status"] = "🟢"
         res_dict["owm"]["wx"] = wmo_to_text(r['current']['weather_code'])
         res_dict["owm"]["cloud"] = r['current']['cloud_cover']
@@ -128,7 +137,10 @@ def get_dual_weather():
             res_dict["owm"]["tmr_rad"] = int(sum(tmr_rads) / len(tmr_rads))
         except:
             res_dict["owm"]["tmr_rad"] = res_dict["owm"]["rad"]
-    except: pass
+    except Exception as e: 
+        print(f"API 抓取失敗原因: {e}")
+        pass
+    
     return res_dict
 
 w = get_dual_weather()
@@ -250,7 +262,7 @@ else:
     time_color = "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區電力契約容量暨空調聯防：H300行動戰情室 V2.52")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.52")
 
 if api_is_online:
     st.markdown("<div class='status-banner-ok'>📡 系統狀態：🟢 ECMWF 衛星連線正常 (資料即時同步中)</div>", unsafe_allow_html=True)
@@ -283,7 +295,7 @@ st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
 sc1, sc2 = st.columns(2)
 with sc1:
     memo_1 = "*明日為假日，無需儲冰備戰。" if tmr_is_holiday else "*已包含填補磁浮 70% 封印所需之額外冰量。"
-    st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間儲冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間儲冰排程</b><br><br>啟 পণ্ডিত：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
 with sc2:
     memo_2 = "*明日為假日，務必手動關閉空調自動排程！" if tmr_is_holiday else "*依 IB-1 設計 13°C 進水條件執行。"
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{memo_2}</span></div>""", unsafe_allow_html=True)
@@ -344,7 +356,7 @@ if tmr_is_holiday:
     c1.metric("非上班日基礎負載", f"{tmr_true_base_load:.1f} kW", "實測假日基本待機用電", delta_color="off")
     c2.metric("📈 動態與高溫加載", f"+0.0 kW", "假日無辦公空調需求")
 else:
-    c1.metric("歷史基礎與動態加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"加上環電當天員工上班率 {occupancy_rate}% 計算", delta_color="off")
+    c1.metric("歷史基礎與動態加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"依進駐率 {occupancy_rate}% 計算", delta_color="off")
     c2.metric("🌡️ 高溫熱負荷加載", f"+{tmr_temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C")
 c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
 c4.metric("🔥 園區絕對最高負載", f"{final_predicted_demand:.1f} kW", "冷氣全開的物理極限", delta_color="off")
@@ -355,54 +367,5 @@ c6.metric(f"📉 {worst_hour} 太陽能殘值", f"-{worst_hour_solar:.1f} kW", "
 c7.metric("⚡ 真實最高台電需量", f"{max_net_grid_demand:.1f} kW", "作為儲備防禦的最高標準", delta_color="inverse")
 c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式")
 
-# ==========================================
-# Google Sheets 大數據倉儲寫入系統 (附帶智慧標題)
-# ==========================================
 st.markdown("---")
-st.subheader("💾 戰情室大數據資料庫 (Google Sheets)")
-
-if not GS_AVAILABLE:
-    st.warning("⚠️ 尚未安裝資料庫套件。請在終端機執行 `pip install gspread google-auth`。")
-elif not os.path.exists("credentials.json"):
-    st.info("ℹ️數據寫入試算表功能，僅能在本機端使用，您目前在雲端版，無法使用寫入功能。")
-else:
-    if st.button("📤 將今日戰情與明日預測寫入資料庫", type="primary", use_container_width=True):
-        try:
-            with st.spinner("正在連線至 Google Sheets 寫入資料..."):
-                scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-                creds = Credentials.from_service_account_file('credentials.json', scopes=scopes)
-                client = gspread.authorize(creds)
-                
-                sheet = client.open('中創園區空調戰情大數據').sheet1
-                
-                # 【V2.52 核心修復】自動檢查並補上欄位標題
-                expected_headers = [
-                    "紀錄時間", "今日進駐率(%)", "今日氣溫(°C)", "今日輻射(W/m²)", 
-                    "今日最危險時段", "今日最高需量(kW)", "明日預估高溫(°C)", 
-                    "明日太陽能峰值(kW)", "明日最危險時段", "明日預估最高需量(kW)", "建議今晚儲冰(小時)"
-                ]
-                
-                first_row = sheet.row_values(1)
-                if not first_row:
-                    sheet.append_row(expected_headers)
-                
-                # 寫入本次的預測數據
-                data_row = [
-                    w['fetch_time'],                      
-                    occupancy_rate,                       
-                    temp,                                 
-                    current_rad,                          
-                    today_worst_hour,                     
-                    round(today_max_net, 1),              
-                    tmr_temp,                             
-                    round(est_solar, 1),                  
-                    worst_hour,                           
-                    round(max_net_grid_demand, 1),        
-                    round(suggested_ice_hrs, 1)           
-                ]
-                sheet.append_row(data_row)
-                st.success(f"✅ 寫入成功！已將 {w['fetch_time']} 的戰情快照與標題備份至雲端。")
-        except Exception as e:
-            st.error(f"❌ 寫入失敗。錯誤細節：{e}")
-
-st.markdown(f"系統運行中 | 氣象大腦同步時間：{w['fetch_time']} | 設備參數：BCU-1(儲冰主機) & IB-1(2500RT-HR)")
+st.markdown(f"<div style='text-align: center; color: #666;'>系統運行中 | 氣象更新時間：{w['fetch_time']} | 設備參數：BCU-1(儲冰主機) & IB-1(2500RT-HR)</div>", unsafe_allow_html=True)
