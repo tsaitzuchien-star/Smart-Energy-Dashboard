@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import urllib3
-import os
 from datetime import datetime, timedelta, timezone
 
 # 關閉不安全的請求警告
@@ -9,7 +8,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.52", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V3.0 (VC 企業級氣象版)", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -46,7 +45,7 @@ base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
     st.header("⚙️ 系統與營運參數")
-    primary_brain = st.radio("氣象大腦來源", ["🇪🇺 歐洲 ECMWF 輻射預測 (最準確)", "🇹🇼 台灣氣象署 (南投縣)"])
+    st.info("📡 氣象大腦：Visual Crossing 企業級氣象 (專屬 API)")
     st.markdown("---")
     st.header("🌞 太陽能預測校正")
     solar_mode = st.radio("太陽能預估模式", ["🤖 API 短波輻射精準推算", "✋ 廠務手動強制設定"])
@@ -62,104 +61,126 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-def wmo_to_text(wmo):
-    if wmo == 0: return "晴朗"
-    elif wmo in [1, 2]: return "多雲"
-    elif wmo == 3: return "陰天"
-    elif 50 <= wmo <= 69: return "降雨"
-    elif 80 <= wmo <= 82: return "陣雨"
-    elif wmo >= 95: return "雷陣雨"
-    return "未知"
+# 簡易英文天氣轉中文
+def translate_wx(wx_en):
+    wx_en = wx_en.lower()
+    if 'clear' in wx_en: return "晴朗"
+    if 'partially cloudy' in wx_en: return "多雲"
+    if 'cloudy' in wx_en or 'overcast' in wx_en: return "陰天"
+    if 'rain' in wx_en: return "降雨"
+    return wx_en.capitalize()
 
-# --- 3. 氣象抓取 ---
+# --- 3. 氣象抓取 (Visual Crossing 專屬通道) ---
 today_str = now_dt.strftime("%Y-%m-%d")
 tmr_dt = now_dt + timedelta(days=1)
 tmr_str = tmr_dt.strftime("%Y-%m-%d")
 
+# 2026 國定假日清單
 TAIWAN_HOLIDAYS_2026 = ["2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-27", "2026-04-03", "2026-04-04", "2026-04-06", "2026-05-01", "2026-06-19", "2026-09-25", "2026-09-28", "2026-10-09", "2026-10-26", "2026-12-25"]
 today_is_holiday = now_dt.weekday() >= 5 or today_str in TAIWAN_HOLIDAYS_2026
 tmr_is_holiday = tmr_dt.weekday() >= 5 or tmr_str in TAIWAN_HOLIDAYS_2026
 
 @st.cache_data(ttl=300) 
-def get_dual_weather():
+def get_vc_weather():
     fetch_time = datetime.now(TW_TZ).strftime('%Y-%m-%d %H:%M:%S')
-    res_dict = {"fetch_time": fetch_time, "cwa": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400}, "owm": {"status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_cloud": 30, "tmr_rad": 400, "cloud_low": 0, "cloud_mid": 0, "cloud_high": 0, "today_hourly": {}, "hourly": {}}}
-    today_prefix = datetime.now(TW_TZ).strftime("%Y-%m-%d")
-    tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
+    res = {
+        "fetch_time": fetch_time, 
+        "status": "🔴", "wx": "未知", "cloud": 0, "rad": 0, 
+        "temp": 25.0, "tmr_temp": 25.0, "tmr_rad": 400, 
+        "cloud_low": 0, "cloud_mid": 0, "cloud_high": 0, 
+        "today_hourly": {}, "hourly": {}
+    }
     
-    try:
-        lat, lon = "23.936537", "120.697917"
-        om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
+    if "VC_API_KEY" not in st.secrets:
+        print("未設定 VC_API_KEY")
+        return res
         
-        # --- 增強版連線設定開始 (解決斷線問題) ---
+    try:
+        vc_key = st.secrets["VC_API_KEY"]
+        lat, lon = "23.9374", "120.6980"
+        # 呼叫 VC API，指定 metric 公制單位，並要求包含我們需要的元素
+        vc_url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{lat},{lon}?unitGroup=metric&key={vc_key}&contentType=json&elements=datetime,temp,cloudcover,solarradiation,conditions,tempmax"
+        
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
-        
         session = requests.Session()
-        # 設定重試 3 次，遇到壅塞時自動退避等待
-        retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+        retry = Retry(total=3, backoff_factor=1)
         adapter = HTTPAdapter(max_retries=retry)
-        session.mount('http://', adapter)
         session.mount('https://', adapter)
         
-        # 將容忍時間拉長至 15 秒
-        r = session.get(om_url, timeout=15).json()
-        # --- 增強版連線設定結束 ---
-
-        res_dict["owm"]["status"] = "🟢"
-        res_dict["owm"]["wx"] = wmo_to_text(r['current']['weather_code'])
-        res_dict["owm"]["cloud"] = r['current']['cloud_cover']
-        res_dict["owm"]["cloud_low"] = r['current']['cloud_cover_low']
-        res_dict["owm"]["cloud_mid"] = r['current']['cloud_cover_mid']
-        res_dict["owm"]["cloud_high"] = r['current']['cloud_cover_high']
-        res_dict["owm"]["rad"] = r['current']['shortwave_radiation']
-        res_dict["owm"]["temp"] = r['current']['temperature_2m']
+        r = session.get(vc_url, timeout=15).json()
+        
+        # 目前天氣
+        curr = r['currentConditions']
+        res["status"] = "🟢"
+        res["wx"] = translate_wx(curr.get('conditions', '未知'))
+        res["cloud"] = curr.get('cloudcover', 0)
+        res["cloud_low"] = curr.get('cloudcover', 0) # VC 統一給總雲量，我們暫時代入低雲
+        res["rad"] = curr.get('solarradiation', 0)
+        res["temp"] = curr.get('temp', 25.0)
+        
+        # 逐時資料與明日總結
+        today_hours = r['days'][0]['hours']
+        tmr_hours = r['days'][1]['hours']
+        res["tmr_temp"] = r['days'][1].get('tempmax', 28.0)
         
         target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
-        times_list = r['hourly']['time']
-        for hour in target_hours:
-            t_str_today = f"{today_prefix}T{hour}"
-            if t_str_today in times_list:
-                idx = times_list.index(t_str_today)
-                res_dict["owm"]["today_hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "c_low": r['hourly']['cloud_cover_low'][idx], "c_mid": r['hourly']['cloud_cover_mid'][idx], "c_high": r['hourly']['cloud_cover_high'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
-        for hour in target_hours:
-            t_str_tmr = f"{tmr_prefix}T{hour}"
-            if t_str_tmr in times_list:
-                idx = times_list.index(t_str_tmr)
-                res_dict["owm"]["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "c_low": r['hourly']['cloud_cover_low'][idx], "c_mid": r['hourly']['cloud_cover_mid'][idx], "c_high": r['hourly']['cloud_cover_high'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
-        try:
-            tmr_temps = [r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)]
-            res_dict["owm"]["tmr_temp"] = max(tmr_temps)
-        except:
-            res_dict["owm"]["tmr_temp"] = res_dict["owm"]["hourly"].get("12:00", {}).get("temp", 28.0)
-        try:
-            tmr_rads = [r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]
-            res_dict["owm"]["tmr_rad"] = int(sum(tmr_rads) / len(tmr_rads))
-        except:
-            res_dict["owm"]["tmr_rad"] = res_dict["owm"]["rad"]
+        
+        # 整理今日逐時
+        for h in target_hours:
+            vc_time = h + ":00" # VC 的時間格式是 08:00:00
+            for hr_data in today_hours:
+                if hr_data['datetime'] == vc_time:
+                    res["today_hourly"][h] = {
+                        "temp": hr_data.get('temp', 25.0), 
+                        "rad": hr_data.get('solarradiation', 0), 
+                        "c_low": hr_data.get('cloudcover', 0), 
+                        "c_mid": 0, "c_high": 0, 
+                        "wx": translate_wx(hr_data.get('conditions', ''))
+                    }
+                    break
+                    
+        # 整理明日逐時
+        tmr_rads = []
+        for h in target_hours:
+            vc_time = h + ":00"
+            for hr_data in tmr_hours:
+                if hr_data['datetime'] == vc_time:
+                    rad_val = hr_data.get('solarradiation', 0)
+                    tmr_rads.append(rad_val)
+                    res["hourly"][h] = {
+                        "temp": hr_data.get('temp', 25.0), 
+                        "rad": rad_val, 
+                        "c_low": hr_data.get('cloudcover', 0), 
+                        "c_mid": 0, "c_high": 0, 
+                        "wx": translate_wx(hr_data.get('conditions', ''))
+                    }
+                    break
+                    
+        # 明日平均輻射量
+        if tmr_rads:
+            res["tmr_rad"] = sum(tmr_rads) / len(tmr_rads)
+            
     except Exception as e: 
-        print(f"API 抓取失敗原因: {e}")
+        print(f"VC API 抓取失敗原因: {e}")
         pass
     
-    return res_dict
+    return res
 
-w = get_dual_weather()
-sel = w["owm"] if "歐洲" in primary_brain and w["owm"]["status"] == "🟢" else w["cwa"]
-cloud, temp, tmr_temp = sel.get("cloud",0), sel.get("temp",25), sel.get("tmr_temp",25)
-current_rad = sel.get("rad", 0)
-tmr_rad = sel.get("tmr_rad", 400)
+w = get_vc_weather()
+cloud, temp, tmr_temp = w.get("cloud",0), w.get("temp",25), w.get("tmr_temp",25)
+current_rad = w.get("rad", 0)
+tmr_rad = w.get("tmr_rad", 400)
 
-api_is_online = "🟢" in w["owm"]["status"] and bool(w["owm"].get("hourly"))
+api_is_online = "🟢" in w["status"] and bool(w.get("hourly"))
 
 with st.sidebar:
     st.markdown("---")
-    st.header("☁️ 即時天空剖析 (ECMWF)")
+    st.header("☁️ 雲量雷達 (VC 總雲量)")
     if api_is_online:
-        st.progress(w["owm"]["cloud_low"] / 100.0, text=f"🌫️ 低雲層 (發電殺手): {w['owm']['cloud_low']}%")
-        st.progress(w["owm"]["cloud_mid"] / 100.0, text=f"☁️ 中雲層 (微弱影響): {w['owm']['cloud_mid']}%")
-        st.progress(w["owm"]["cloud_high"] / 100.0, text=f"🌤️ 高雲層 (陽光穿透): {w['owm']['cloud_high']}%")
+        st.progress(w["cloud"] / 100.0, text=f"☁️ 天空遮蔽率: {w['cloud']}%")
     else:
-        st.error("⚠️ API 連線中斷，無法顯示雲層。")
+        st.error("⚠️ API 尚未連線或未設定金鑰。")
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
 # --- 4. 決策大腦運算 ---
@@ -173,15 +194,14 @@ today_worst_hour = "未知"
 
 if api_is_online:
     target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
-    max_rad_today_real = max([w["owm"]["today_hourly"][h]["rad"] for h in target_hours if h in w["owm"]["today_hourly"]] + [1])
+    max_rad_today_real = max([w["today_hourly"][h]["rad"] for h in target_hours if h in w["today_hourly"]] + [1])
     for h in target_hours:
-        if h in w["owm"]["today_hourly"]:
-            h_temp = w["owm"]["today_hourly"][h]['temp']
-            h_rad = w["owm"]["today_hourly"][h]['rad']
+        if h in w["today_hourly"]:
+            h_temp = w["today_hourly"][h]['temp']
+            h_rad = w["today_hourly"][h]['rad']
             if today_is_holiday: h_load = 160.0
             else: h_load = today_base_load + today_actual_load + max(0, (h_temp - 25.0) * 5.5) - today_shaved_kw
-            if solar_mode == "🤖 API 短波輻射精準推算": h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0)
-            else: h_solar = min(manual_solar, manual_solar * (h_rad / max_rad_today_real if max_rad_today_real > 0 else 0))
+            h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) if solar_mode == "🤖 API 短波輻射精準推算" else min(manual_solar, manual_solar * (h_rad / max_rad_today_real if max_rad_today_real > 0 else 0))
             h_net = h_load - h_solar
             if h_net > today_max_net:
                 today_max_net = h_net
@@ -194,10 +214,7 @@ else:
 
 # [4.2 明日決策]
 if tmr_is_holiday:
-    tmr_true_base_load = 160.0
-    tmr_actual_load_growth = 0.0
-    tmr_temp_penalty = 0.0
-    tmr_shaved_kw = 0.0
+    tmr_true_base_load, tmr_actual_load_growth, tmr_temp_penalty, tmr_shaved_kw = 160.0, 0.0, 0.0, 0.0
 else:
     tmr_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
     tmr_true_base_load = base_load_historical + tmr_ice_rest
@@ -206,31 +223,19 @@ else:
     tmr_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
 
 final_predicted_demand = tmr_true_base_load + tmr_actual_load_growth + tmr_temp_penalty - tmr_shaved_kw
+est_solar = SOLAR_MAX_KW * min(1.0, w.get("tmr_rad", 400) / 1000.0) if solar_mode == "🤖 API 短波輻射精準推算" else manual_solar
 
-if solar_mode == "🤖 API 短波輻射精準推算":
-    solar_eff = min(1.0, tmr_rad / 1000.0)
-    est_solar = SOLAR_MAX_KW * solar_eff
-    solar_ui_label = f"↑ 實測大數據轉換"
-else:
-    est_solar = manual_solar
-    solar_ui_label = f"↑ ✋ 廠務手動巔峰校正"
-
-max_net_grid_demand = 0.0
-worst_hour = "未知"
-worst_hour_load = 0.0
-worst_hour_solar = 0.0
+max_net_grid_demand, worst_hour = 0.0, "未知"
+worst_hour_load, worst_hour_solar = 0.0, 0.0
 
 if api_is_online:
     target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
-    max_rad_tmr = max([w["owm"]["hourly"][h]["rad"] for h in target_hours if h in w["owm"]["hourly"]] + [1])
+    max_rad_tmr = max([w["hourly"][h]["rad"] for h in target_hours if h in w["hourly"]] + [1])
     for h in target_hours:
-        if h in w["owm"]["hourly"]:
-            h_temp = w["owm"]["hourly"][h]['temp']
-            h_rad = w["owm"]["hourly"][h]['rad']
-            if tmr_is_holiday: h_load = 160.0
-            else: h_load = tmr_true_base_load + tmr_actual_load_growth + max(0, (h_temp - 25.0) * 5.5) - tmr_shaved_kw
-            if solar_mode == "🤖 API 短波輻射精準推算": h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0)
-            else: h_solar = min(manual_solar, manual_solar * (h_rad / max_rad_tmr if max_rad_tmr > 0 else 0))
+        if h in w["hourly"]:
+            h_temp, h_rad = w["hourly"][h]['temp'], w["hourly"][h]['rad']
+            h_load = 160.0 if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + max(0, (h_temp - 25.0) * 5.5) - tmr_shaved_kw
+            h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) if solar_mode == "🤖 API 短波輻射精準推算" else min(manual_solar, manual_solar * (h_rad / max_rad_tmr if max_rad_tmr > 0 else 0))
             h_net = h_load - h_solar
             if h_net > max_net_grid_demand:
                 max_net_grid_demand = h_net
@@ -256,18 +261,16 @@ else:
     end_minutes = 7 * 60 
     start_minutes = int(end_minutes - (suggested_ice_hrs * 60))
     if start_minutes < 0: start_minutes += 24 * 60
-    start_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}"
-    end_time_str = "07:00"
-    melt_start, melt_end = "10:00", "16:00"
+    start_time_str, end_time_str, melt_start, melt_end = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00", "10:00", "16:00"
     time_color = "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.52")
+st.title("❄️ 中創園區空調聯防：H300行動戰情室 V3.0")
 
 if api_is_online:
-    st.markdown("<div class='status-banner-ok'>📡 系統狀態：🟢 ECMWF 衛星連線正常 (資料即時同步中)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='status-banner-ok'>📡 系統狀態：🟢 專屬金鑰連線成功 (VC 企業級氣象同步中)</div>", unsafe_allow_html=True)
 else:
-    st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 API 壅塞斷線 (已自動切換至保守盲估模式，保障防禦底線)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 等待金鑰輸入 (請確認 Streamlit Secrets 設定)</div>", unsafe_allow_html=True)
 
 if tmr_is_holiday:
     action_msg = f"🎉 假日停機警報：明日 ({tmr_str}) 為休息日/補假！請【暫停今晚儲冰】，並手動解除排程。"
@@ -308,10 +311,10 @@ if api_is_online:
     for i, h in enumerate(target_hours):
         with h_cols_today[i]:
             st.markdown(f"<div style='text-align:center; font-size:18px; font-weight:bold; color:#17a2b8;'>⏰ {h}</div>", unsafe_allow_html=True)
-            if h in w["owm"]["today_hourly"]:
-                h_data = w["owm"]["today_hourly"][h]
+            if h in w["today_hourly"]:
+                h_data = w["today_hourly"][h]
                 h_temp, h_rad = h_data['temp'], h_data['rad']
-                c_low, c_mid, c_high = h_data.get('c_low',0), h_data.get('c_mid',0), h_data.get('c_high',0)
+                c_low = h_data.get('c_low',0)
                 if today_is_holiday: h_load = 160.0
                 else: h_load = today_base_load + today_actual_load + max(0, (h_temp - 25.0) * 5.5) - today_shaved_kw
                 if solar_mode == "🤖 API 短波輻射精準推算": h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0)
@@ -320,7 +323,7 @@ if api_is_online:
                 card_color = "#dc3545" if h_net > CONTRACT_LIMIT - 15 else ("#ffc107" if h_net > CONTRACT_LIMIT - 50 else "#28a745")
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
-                st.markdown(f"""<div class="hourly-card-today" style="border-left-color: {card_color};"><div class="cloud-badge"><div>☁️ 雲分布 (低/中/高)</div><div style="font-weight:bold;">{c_low}% / {c_mid}% / {c_high}%</div></div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#b8daff; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="hourly-card-today" style="border-left-color: {card_color};"><div class="cloud-badge"><div>☁️ 雲分布 (總雲量)</div><div style="font-weight:bold;">{c_low}%</div></div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#b8daff; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
             else: st.write("資料擷取中...")
 else:
     st.warning("📡 由於 API 暫時無法連線，系統已暫停繪製今日逐時雷達圖。請參考上方 6 宮格的盲估安全值，或稍後再試。")
@@ -332,10 +335,10 @@ if api_is_online:
     for i, h in enumerate(target_hours):
         with h_cols[i]:
             st.markdown(f"<div style='text-align:center; font-size:18px; font-weight:bold; color:#1E3A8A;'>⏰ {h}</div>", unsafe_allow_html=True)
-            if h in w["owm"]["hourly"]:
-                h_data = w["owm"]["hourly"][h]
+            if h in w["hourly"]:
+                h_data = w["hourly"][h]
                 h_temp, h_rad = h_data['temp'], h_data['rad']
-                c_low, c_mid, c_high = h_data.get('c_low',0), h_data.get('c_mid',0), h_data.get('c_high',0)
+                c_low = h_data.get('c_low',0)
                 if tmr_is_holiday: h_load = 160.0
                 else: h_load = tmr_true_base_load + tmr_actual_load_growth + max(0, (h_temp - 25.0) * 5.5) - tmr_shaved_kw
                 if solar_mode == "🤖 API 短波輻射精準推算": h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0)
@@ -344,7 +347,7 @@ if api_is_online:
                 card_color = "#dc3545" if h_net > CONTRACT_LIMIT - 15 else ("#ffc107" if h_net > CONTRACT_LIMIT - 50 else "#28a745")
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
-                st.markdown(f"""<div class="hourly-card" style="border-left: 4px solid {card_color};"><div class="cloud-badge"><div>☁️ 雲分布 (低/中/高)</div><div style="font-weight:bold;">{c_low}% / {c_mid}% / {c_high}%</div></div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#ddd; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="hourly-card" style="border-left: 4px solid {card_color};"><div class="cloud-badge"><div>☁️ 雲分布 (總雲量)</div><div style="font-weight:bold;">{c_low}%</div></div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#ddd; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
             else: st.write("資料擷取中...")
 else:
     st.warning("📡 由於 API 暫時無法連線，系統已暫停繪製明日逐時雷達圖。請參考上方 6 宮格的盲估安全值，或稍後再試。")
