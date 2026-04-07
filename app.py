@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import urllib3
+import os
 from datetime import datetime, timedelta, timezone
 
 # 關閉不安全的請求警告
@@ -8,13 +9,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V3.1 (雙核心備援)", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V3.1", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
     .ice-card { background-color: white; border-radius: 15px; text-align: center; box-shadow: 2px 2px 10px rgba(0,0,0,0.05); display: flex; flex-direction: column; justify-content: center; min-height: 320px; }
     .ice-value { font-size: 115px; font-weight: 900; color: #1f77b4; line-height: 1.0; }
     .ice-unit { font-size: 32px; color: #555; font-weight: bold; margin-left: 8px; }
+    .ice-date { font-size: 18px; color: #888; margin-bottom: 10px; font-weight: bold; }
     .action-call { background-color: #1E3A8A; color: white; padding: 15px; border-radius: 10px; font-size: 24px; font-weight: bold; text-align: center; margin-top: 15px; }
     .schedule-box { padding: 20px; border-radius: 10px; border: 2px dashed #4682B4; background-color: #F0F8FF; font-size: 20px;}
     .schedule-time { font-size: 32px; font-weight: bold; }
@@ -84,6 +86,10 @@ today_str = now_dt.strftime("%Y-%m-%d")
 tmr_dt = now_dt + timedelta(days=1)
 tmr_str = tmr_dt.strftime("%Y-%m-%d")
 
+# 用於顯示在卡片上的中文日期
+week_list = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+display_date_full = f"{now_dt.strftime('%Y/%m/%d')} {week_list[now_dt.weekday()]}"
+
 TAIWAN_HOLIDAYS_2026 = ["2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19", "2026-02-20", "2026-02-27", "2026-04-03", "2026-04-04", "2026-04-06", "2026-05-01", "2026-06-19", "2026-09-25", "2026-09-28", "2026-10-09", "2026-10-26", "2026-12-25"]
 today_is_holiday = now_dt.weekday() >= 5 or today_str in TAIWAN_HOLIDAYS_2026
 tmr_is_holiday = tmr_dt.weekday() >= 5 or tmr_str in TAIWAN_HOLIDAYS_2026
@@ -104,7 +110,7 @@ def get_smart_weather():
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
     session = requests.Session()
-    retry = Retry(total=2, backoff_factor=0.5) # 快速重試 2 次
+    retry = Retry(total=2, backoff_factor=0.5)
     adapter = HTTPAdapter(max_retries=retry)
     session.mount('https://', adapter)
 
@@ -230,7 +236,8 @@ else:
     h_load = 160.0 if today_is_holiday else today_base_load + today_actual_load + max(0, (28.0 - 25.0) * 5.5) - today_shaved_kw
     today_max_net, today_worst_hour = h_load - (SOLAR_MAX_KW * 0.4), "斷線盲估"
 
-if tmr_is_holiday: tmr_true_base_load, tmr_actual_load_growth, tmr_temp_penalty, tmr_shaved_kw = 160.0, 0.0, 0.0, 0.0
+if tmr_is_holiday: 
+    tmr_true_base_load, tmr_actual_load_growth, tmr_temp_penalty, tmr_shaved_kw = 160.0, 0.0, 0.0, 0.0
 else:
     tmr_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
     tmr_true_base_load = base_load_historical + tmr_ice_rest
@@ -290,7 +297,13 @@ st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
 c_action, c_metrics = st.columns([1.2, 1])
 with c_action:
     border_color = "#17a2b8" if tmr_is_holiday else ("#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 5 else "#dc3545")
-    st.markdown(f"""<div class="ice-card" style="border: 4px solid {border_color};"><div style="font-size: 28px; color: #666; font-weight: bold; margin-bottom: 15px;">建議今晚儲冰時間</div><div><span class="ice-value">{suggested_ice_hrs:.1f}</span><span class="ice-unit">小時</span></div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""
+        <div class="ice-card" style="border: 4px solid {border_color};">
+            <div style="font-size: 28px; color: #666; font-weight: bold; margin-bottom: 5px;">建議今晚儲冰時間</div>
+            <div class="ice-date">{display_date_full}</div>
+            <div><span class="ice-value">{suggested_ice_hrs:.1f}</span><span class="ice-unit">小時</span></div>
+        </div>
+    """, unsafe_allow_html=True)
 
 with c_metrics:
     st.markdown(f"""<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px 15px; min-height: 320px; align-content: center;"><div><div style="font-size: 15px; color: #555;">目前園區氣溫</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{temp} <span style="font-size: 16px;">°C</span></div></div><div><div style="font-size: 15px; color: #555;">明日預測最高溫</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{tmr_temp} <span style="font-size: 16px;">°C</span></div></div><div><div style="font-size: 15px; color: #555;">目前短波輻射強度</div><div style="font-size: 38px; font-weight: 700; color: #d35400;">{current_rad} <span style="font-size: 16px;">W/m²</span></div></div><div><div style="font-size: 15px; color: #555;">明日平均太陽能</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{est_solar:.1f} <span style="font-size: 16px;">kW</span></div></div><div style="background: #f0f8ff; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #17a2b8;"><div style="font-size: 14px; color: #555; font-weight: bold;">今日最危險 ({today_worst_hour})</div><div style="font-size: 38px; font-weight: 900; color: #17a2b8;">{today_max_net:.1f} <span style="font-size: 16px;">kW</span></div></div><div style="background: #ffeaea; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #dc3545;"><div style="font-size: 14px; color: #555; font-weight: bold;">明日最危險 ({worst_hour})</div><div style="font-size: 38px; font-weight: 900; color: #dc3545;">{max_net_grid_demand:.1f} <span style="font-size: 16px;">kW</span></div></div></div>""", unsafe_allow_html=True)
@@ -308,7 +321,7 @@ with sc2:
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{memo_2}</span></div>""", unsafe_allow_html=True)
 
 st.markdown("---")
-st.subheader(f"⚡ 今日關鍵時段即時追蹤 ({today_str} 現場比對專用)")
+st.subheader(f"⚡ 今日關鍵時段即時追蹤 ({today_str} 現場比比對專用)")
 
 if api_is_online:
     h_cols_today = st.columns(5)
@@ -327,7 +340,15 @@ if api_is_online:
                 card_color = "#dc3545" if h_net > CONTRACT_LIMIT - 15 else ("#ffc107" if h_net > CONTRACT_LIMIT - 50 else "#28a745")
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
-                st.markdown(f"""<div class="hourly-card-today" style="border-left-color: {card_color};"><div class="cloud-badge"><div>☁️ 雲分布</div><div style="font-weight:bold;">{c_low}%</div></div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#b8daff; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
+                
+                # 自動判斷要顯示低中高雲層還是總雲量
+                cloud_html = ""
+                if w["status_code"] == 1:
+                    cloud_html = f"<div>☁️ 雲分布 (低/中/高)</div><div style='font-weight:bold;'>{h_data.get('c_low',0)}% / {h_data.get('c_mid',0)}% / {h_data.get('c_high',0)}%</div>"
+                else:
+                    cloud_html = f"<div>☁️ 雲分布 (總雲量)</div><div style='font-weight:bold;'>{c_low}%</div>"
+                    
+                st.markdown(f"""<div class="hourly-card-today" style="border-left-color: {card_color};"><div class="cloud-badge">{cloud_html}</div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#b8daff; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
             else: st.write("資料擷取中...")
 else: st.warning("📡 由於 API 暫時無法連線，系統已暫停繪製今日逐時雷達圖。")
 
@@ -350,7 +371,15 @@ if api_is_online:
                 card_color = "#dc3545" if h_net > CONTRACT_LIMIT - 15 else ("#ffc107" if h_net > CONTRACT_LIMIT - 50 else "#28a745")
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
-                st.markdown(f"""<div class="hourly-card" style="border-left: 4px solid {card_color};"><div class="cloud-badge"><div>☁️ 雲分布</div><div style="font-weight:bold;">{c_low}%</div></div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#ddd; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
+                
+                # 自動判斷要顯示低中高雲層還是總雲量
+                cloud_html = ""
+                if w["status_code"] == 1:
+                    cloud_html = f"<div>☁️ 雲分布 (低/中/高)</div><div style='font-weight:bold;'>{h_data.get('c_low',0)}% / {h_data.get('c_mid',0)}% / {h_data.get('c_high',0)}%</div>"
+                else:
+                    cloud_html = f"<div>☁️ 雲分布 (總雲量)</div><div style='font-weight:bold;'>{c_low}%</div>"
+                    
+                st.markdown(f"""<div class="hourly-card" style="border-left: 4px solid {card_color};"><div class="cloud-badge">{cloud_html}</div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#ddd; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
             else: st.write("資料擷取中...")
 else: st.warning("📡 由於 API 暫時無法連線，系統已暫停繪製明日逐時雷達圖。")
 
