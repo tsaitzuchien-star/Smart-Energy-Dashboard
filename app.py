@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V3.1", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防戰情室 V3.1.2", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -37,7 +37,7 @@ ICE_BANK_MAX_RTHR = 2500.0
 MAG_CHILLER_RT = 200.0       
 MAG_CAP_LIMIT = 0.70         
 MAG_EFF = 0.7                
-SOLAR_MAX_KW = 135.0         
+SOLAR_MAX_KW = 150.0         # <-- 已在此更新為 150kW
 
 now_dt = datetime.now(TW_TZ)
 current_month = now_dt.month
@@ -279,7 +279,7 @@ else:
     start_time_str, end_time_str, melt_start, melt_end, time_color = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00", "10:00", "16:00", "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.1")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.1.2")
 
 if w["status_code"] == 1:
     st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 ECMWF 歐洲衛星連線正常 (主力運作中)</div>", unsafe_allow_html=True)
@@ -321,7 +321,7 @@ with sc2:
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{memo_2}</span></div>""", unsafe_allow_html=True)
 
 st.markdown("---")
-st.subheader(f"⚡ 今日關鍵時段即時追蹤 ({today_str} 現場比比對專用)")
+st.subheader(f"⚡ 今日關鍵時段即時追蹤 ({today_str} 現場比對專用)")
 
 if api_is_online:
     h_cols_today = st.columns(5)
