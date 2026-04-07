@@ -16,7 +16,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V2.52", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區電力契約容量暨空調聯防戰情室 V2.52", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
