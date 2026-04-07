@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防戰情室 V3.1.2", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區空調聯防戰情室 V3.1.4", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -37,7 +37,7 @@ ICE_BANK_MAX_RTHR = 2500.0
 MAG_CHILLER_RT = 200.0       
 MAG_CAP_LIMIT = 0.70         
 MAG_EFF = 0.7                
-SOLAR_MAX_KW = 150.0         # <-- 已在此更新為 150kW
+SOLAR_MAX_KW = 150.0         
 
 now_dt = datetime.now(TW_TZ)
 current_month = now_dt.month
@@ -57,7 +57,8 @@ with st.sidebar:
     else: manual_solar = 80.0
     st.markdown("---")
     st.header("🏢 動態負載微調")
-    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=70, step=5)
+    # 將預設值由 70 修改為 80，反映進駐人數成長
+    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=80, step=5)
     chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     st.markdown("---")
     if st.button("🔄 強制同步最新氣象", use_container_width=True):
@@ -117,7 +118,7 @@ def get_smart_weather():
     # ＝＝＝ [計畫 A]：嘗試抓取老闆指定的 ECMWF ＝＝＝
     try:
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
-        r_om = session.get(om_url, timeout=5) # 只等 5 秒，不行就立刻放棄換備援
+        r_om = session.get(om_url, timeout=5)
         
         if r_om.status_code == 200:
             r = r_om.json()
@@ -168,7 +169,7 @@ def get_smart_weather():
                 curr = r['currentConditions']
                 res["wx"] = translate_wx(curr.get('conditions', '未知'))
                 res["cloud"] = curr.get('cloudcover', 0)
-                res["cloud_low"] = curr.get('cloudcover', 0) # VC用總雲量代替
+                res["cloud_low"] = curr.get('cloudcover', 0) 
                 res["rad"] = curr.get('solarradiation', 0)
                 res["temp"] = curr.get('temp', 25.0)
                 res["tmr_temp"] = r['days'][1].get('tempmax', 28.0)
@@ -279,7 +280,7 @@ else:
     start_time_str, end_time_str, melt_start, melt_end, time_color = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00", "10:00", "16:00", "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.1.2")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.1.4")
 
 if w["status_code"] == 1:
     st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 ECMWF 歐洲衛星連線正常 (主力運作中)</div>", unsafe_allow_html=True)
@@ -341,7 +342,6 @@ if api_is_online:
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
                 
-                # 自動判斷要顯示低中高雲層還是總雲量
                 cloud_html = ""
                 if w["status_code"] == 1:
                     cloud_html = f"<div>☁️ 雲分布 (低/中/高)</div><div style='font-weight:bold;'>{h_data.get('c_low',0)}% / {h_data.get('c_mid',0)}% / {h_data.get('c_high',0)}%</div>"
@@ -372,7 +372,6 @@ if api_is_online:
                 st.write(f"🌤️ {h_data['wx']}")
                 st.write(f"🌡️ {h_temp} °C | ☀️ {h_rad} W/m²")
                 
-                # 自動判斷要顯示低中高雲層還是總雲量
                 cloud_html = ""
                 if w["status_code"] == 1:
                     cloud_html = f"<div>☁️ 雲分布 (低/中/高)</div><div style='font-weight:bold;'>{h_data.get('c_low',0)}% / {h_data.get('c_mid',0)}% / {h_data.get('c_high',0)}%</div>"
@@ -384,22 +383,27 @@ if api_is_online:
 else: st.warning("📡 由於 API 暫時無法連線，系統已暫停繪製明日逐時雷達圖。")
 
 st.markdown("---")
+
+# =========================================================================
+# V3.1.4 重點修復：確保所有灰色輔助說明文字 (delta) 都完整顯示
+# =========================================================================
 st.subheader("📊 明日防禦決策基準：聚焦最嚴苛時段")
 c1, c2, c3, c4 = st.columns(4)
 if tmr_is_holiday:
-    c1.metric("非上班日基礎負載", f"{tmr_true_base_load:.1f} kW", delta_color="off")
-    c2.metric("📈 動態與高溫加載", f"+0.0 kW")
+    c1.metric("非上班日基礎負載", f"{tmr_true_base_load:.1f} kW", "實測假日基本待機用電", delta_color="off")
+    c2.metric("📈 動態與高溫加載", f"+0.0 kW", "假日無辦公空調需求", delta_color="off")
 else:
-    c1.metric("歷史基礎與動態加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", delta_color="off")
-    c2.metric("🌡️ 高溫熱負荷加載", f"+{tmr_temp_penalty:.1f} kW")
-c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", delta_color="normal")
-c4.metric("🔥 園區絕對最高負載", f"{final_predicted_demand:.1f} kW", delta_color="off")
+    c1.metric("歷史基礎與動態加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"依進駐率 {occupancy_rate}% 計算", delta_color="off")
+    c2.metric("🌡️ 高溫熱負荷加載", f"+{tmr_temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C", delta_color="off")
+
+c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
+c4.metric("🔥 園區絕對最高負載", f"{final_predicted_demand:.1f} kW", "冷氣全開的物理極限", delta_color="off")
 
 c5, c6, c7, c8 = st.columns(4)
-c5.metric(f"🔥 {worst_hour} 預估負載", f"{worst_hour_load:.1f} kW", delta_color="off")
-c6.metric(f"📉 {worst_hour} 太陽能殘值", f"-{worst_hour_solar:.1f} kW", delta_color="normal")
-c7.metric("⚡ 真實最高台電需量", f"{max_net_grid_demand:.1f} kW", delta_color="inverse")
-c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW")
+c5.metric(f"🔥 {worst_hour} 預估負載", f"{worst_hour_load:.1f} kW", "該時段之建築耗能", delta_color="off")
+c6.metric(f"📉 {worst_hour} 太陽能殘值", f"-{worst_hour_solar:.1f} kW", "太陽偏西或雲層遮蔽後之發電量", delta_color="normal")
+c7.metric("⚡ 真實最高台電需量", f"{max_net_grid_demand:.1f} kW", "作為儲備防禦的最高標準", delta_color="inverse")
+c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式", delta_color="off")
 
 st.markdown("---")
 st.markdown(f"<div style='text-align: center; color: #666;'>系統運行中 | 氣象更新時間：{w['fetch_time']} | 設備參數：CHU-2(磁浮冰機) & BCU-1(儲冰主機) & IB-1(2500RT-HR)</div>", unsafe_allow_html=True)
