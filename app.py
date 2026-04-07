@@ -250,7 +250,7 @@ else:
     time_color = "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區空調聯防：H300行動戰情室 V2.52")
+st.title("❄️ 中創園區電力契約容量暨空調聯防：H300行動戰情室 V2.52")
 
 if api_is_online:
     st.markdown("<div class='status-banner-ok'>📡 系統狀態：🟢 ECMWF 衛星連線正常 (資料即時同步中)</div>", unsafe_allow_html=True)
