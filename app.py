@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區空調聯防戰情室 V3.1.4", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.1.4", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -294,7 +294,7 @@ elif suggested_ice_hrs <= 2: action_msg = f"🟢 預估明日最高需量 {max_n
 elif suggested_ice_hrs <= 5: action_msg = f"🟡 預估明日最高需量 {max_net_grid_demand:.1f} kW 逼近警戒！需補充 70% 封印缺口，請加強儲冰。"
 else: action_msg = f"🔴 警告：明日危險時段需量暴增至 {max_net_grid_demand:.1f} kW！嚴防午後超約，務必長時間儲冰！"
 
-st.markdown("### 🔔 健維哥-空調核心指令 (今晚任務)")
+st.markdown("### 🔔 空調團隊-空調核心指令 (今晚任務)")
 c_action, c_metrics = st.columns([1.2, 1])
 with c_action:
     border_color = "#17a2b8" if tmr_is_holiday else ("#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 5 else "#dc3545")
