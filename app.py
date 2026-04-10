@@ -37,7 +37,7 @@ ICE_BANK_MAX_RTHR = 2500.0
 MAG_CHILLER_RT = 200.0       
 MAG_CAP_LIMIT = 0.70         
 MAG_EFF = 0.7                
-SOLAR_MAX_KW = 150.0         
+SOLAR_MAX_KW = 145.0         
 
 now_dt = datetime.now(TW_TZ)
 current_month = now_dt.month
