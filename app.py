@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.1.4", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.1.5", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -48,7 +48,7 @@ base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
     st.header("⚙️ 系統與營運參數")
-    st.info("📡 氣象大腦：雙核心自動備援 (ECMWF 主力 + VC 備援)")
+    st.info("📡 雙源動態校正：ECMWF 衛星輻射 + 實測高溫防禦比對")
     st.markdown("---")
     st.header("🌞 太陽能預測校正")
     solar_mode = st.radio("太陽能預估模式", ["🤖 API 短波輻射精準推算", "✋ 廠務手動強制設定"])
@@ -57,7 +57,6 @@ with st.sidebar:
     else: manual_solar = 80.0
     st.markdown("---")
     st.header("🏢 動態負載微調")
-    # 將預設值由 70 修改為 80，反映進駐人數成長
     occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=80, step=5)
     chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     st.markdown("---")
@@ -82,12 +81,11 @@ def translate_wx(wx_en):
     if 'rain' in wx_en: return "降雨"
     return wx_en.capitalize()
 
-# --- 3. 智慧氣象抓取 (自動備援機制) ---
+# --- 3. 智慧氣象抓取 (雙源高溫動態比對機制) ---
 today_str = now_dt.strftime("%Y-%m-%d")
 tmr_dt = now_dt + timedelta(days=1)
 tmr_str = tmr_dt.strftime("%Y-%m-%d")
 
-# 用於顯示在卡片上的中文日期
 week_list = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
 display_date_full = f"{now_dt.strftime('%Y/%m/%d')} {week_list[now_dt.weekday()]}"
 
@@ -101,7 +99,8 @@ def get_smart_weather():
     res = {
         "fetch_time": fetch_time, "status_code": 0, "source": "盲估",
         "wx": "未知", "cloud": 0, "rad": 0, "temp": 25.0, "tmr_temp": 25.0, "tmr_rad": 400, 
-        "cloud_low": 0, "cloud_mid": 0, "cloud_high": 0, "today_hourly": {}, "hourly": {}
+        "cloud_low": 0, "cloud_mid": 0, "cloud_high": 0, "today_hourly": {}, "hourly": {},
+        "temp_is_calibrated": False # 追蹤是否有觸發高溫校正
     }
     today_prefix = datetime.now(TW_TZ).strftime("%Y-%m-%d")
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -115,7 +114,10 @@ def get_smart_weather():
     adapter = HTTPAdapter(max_retries=retry)
     session.mount('https://', adapter)
 
-    # ＝＝＝ [計畫 A]：嘗試抓取老闆指定的 ECMWF ＝＝＝
+    ecmwf_parsed = None
+    vc_parsed = None
+
+    # === [計畫 A]：抓取 ECMWF 歐洲衛星 (主攻輻射與雲量) ===
     try:
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
         r_om = session.get(om_url, timeout=5)
@@ -143,19 +145,15 @@ def get_smart_weather():
                     idx = times_list.index(t_tm)
                     res["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "c_low": r['hourly']['cloud_cover_low'][idx], "c_mid": r['hourly']['cloud_cover_mid'][idx], "c_high": r['hourly']['cloud_cover_high'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
             
-            try:
-                res["tmr_temp"] = max([r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)])
+            try: res["tmr_temp"] = max([r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)])
             except: res["tmr_temp"] = res["hourly"].get("12:00", {}).get("temp", 28.0)
-            
-            try:
-                tmr_rads = [r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]
-                res["tmr_rad"] = int(sum(tmr_rads) / len(tmr_rads))
+            try: res["tmr_rad"] = int(sum([r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]) / len(range(8, 17, 2)))
             except: res["tmr_rad"] = res["rad"]
-            return res
-    except Exception as e:
-        print(f"ECMWF 失敗，啟動備援: {e}")
+            
+            ecmwf_parsed = True
+    except Exception as e: print(f"ECMWF 抓取失敗: {e}")
 
-    # ＝＝＝ [計畫 B]：ECMWF 失敗，無縫啟用 VC 企業備援 ＝＝＝
+    # === [計畫 B]：抓取 VC 企業站 (地面觀測站，主攻高溫校正與斷線備援) ===
     if "VC_API_KEY" in st.secrets:
         try:
             vc_key = st.secrets["VC_API_KEY"]
@@ -164,33 +162,59 @@ def get_smart_weather():
             
             if r_vc.status_code == 200:
                 r = r_vc.json()
-                res["source"] = "VC"
-                res["status_code"] = 2
-                curr = r['currentConditions']
-                res["wx"] = translate_wx(curr.get('conditions', '未知'))
-                res["cloud"] = curr.get('cloudcover', 0)
-                res["cloud_low"] = curr.get('cloudcover', 0) 
-                res["rad"] = curr.get('solarradiation', 0)
-                res["temp"] = curr.get('temp', 25.0)
-                res["tmr_temp"] = r['days'][1].get('tempmax', 28.0)
-                
+                vc_parsed = {
+                    "current_temp": r['currentConditions'].get('temp', 25.0),
+                    "tmr_temp": r['days'][1].get('tempmax', 28.0),
+                    "today_hourly": {}, "hourly": {}
+                }
                 today_hours, tmr_hours = r['days'][0]['hours'], r['days'][1]['hours']
                 for h in target_hours:
                     vc_time = h + ":00"
                     for hr_data in today_hours:
-                        if hr_data['datetime'] == vc_time:
-                            res["today_hourly"][h] = {"temp": hr_data.get('temp', 25.0), "rad": hr_data.get('solarradiation', 0), "c_low": hr_data.get('cloudcover', 0), "c_mid": 0, "c_high": 0, "wx": translate_wx(hr_data.get('conditions', ''))}
-                            break
+                        if hr_data['datetime'] == vc_time: vc_parsed["today_hourly"][h] = hr_data.get('temp', 25.0)
                     for hr_data in tmr_hours:
-                        if hr_data['datetime'] == vc_time:
-                            res["hourly"][h] = {"temp": hr_data.get('temp', 25.0), "rad": hr_data.get('solarradiation', 0), "c_low": hr_data.get('cloudcover', 0), "c_mid": 0, "c_high": 0, "wx": translate_wx(hr_data.get('conditions', ''))}
-                            break
-                
-                tmr_rads = [res["hourly"][h]["rad"] for h in res["hourly"] if "rad" in res["hourly"][h]]
-                if tmr_rads: res["tmr_rad"] = sum(tmr_rads) / len(tmr_rads)
-                return res
-        except Exception as e:
-            print(f"VC 備援也失敗: {e}")
+                        if hr_data['datetime'] == vc_time: vc_parsed["hourly"][h] = hr_data.get('temp', 25.0)
+
+                # 如果 ECMWF 斷線，VC 全面接管成為主力
+                if not ecmwf_parsed:
+                    res["source"] = "VC"
+                    res["status_code"] = 2
+                    curr = r['currentConditions']
+                    res["wx"] = translate_wx(curr.get('conditions', '未知'))
+                    res["cloud"] = curr.get('cloudcover', 0)
+                    res["cloud_low"] = curr.get('cloudcover', 0) 
+                    res["rad"] = curr.get('solarradiation', 0)
+                    res["temp"] = vc_parsed["current_temp"]
+                    res["tmr_temp"] = vc_parsed["tmr_temp"]
+                    
+                    for h in target_hours:
+                        vc_time = h + ":00"
+                        for hr_data in today_hours:
+                            if hr_data['datetime'] == vc_time: res["today_hourly"][h] = {"temp": hr_data.get('temp', 25.0), "rad": hr_data.get('solarradiation', 0), "c_low": hr_data.get('cloudcover', 0), "c_mid": 0, "c_high": 0, "wx": translate_wx(hr_data.get('conditions', ''))}
+                        for hr_data in tmr_hours:
+                            if hr_data['datetime'] == vc_time: res["hourly"][h] = {"temp": hr_data.get('temp', 25.0), "rad": hr_data.get('solarradiation', 0), "c_low": hr_data.get('cloudcover', 0), "c_mid": 0, "c_high": 0, "wx": translate_wx(hr_data.get('conditions', ''))}
+                    
+                    tmr_rads = [res["hourly"][h]["rad"] for h in res["hourly"] if "rad" in res["hourly"][h]]
+                    if tmr_rads: res["tmr_rad"] = sum(tmr_rads) / len(tmr_rads)
+        except Exception as e: print(f"VC 抓取失敗: {e}")
+
+    # === [關鍵演算法]：雙源溫度極端值比對 (Max 取高邏輯) ===
+    # 若兩個來源都存活，針對「溫度」強勢覆寫，保障熱負荷防禦不被低估
+    if ecmwf_parsed and vc_parsed:
+        if vc_parsed["current_temp"] > res["temp"]:
+            res["temp"] = vc_parsed["current_temp"]
+            res["temp_is_calibrated"] = True
+        
+        if vc_parsed["tmr_temp"] > res["tmr_temp"]:
+            res["tmr_temp"] = vc_parsed["tmr_temp"]
+            
+        for h in target_hours:
+            if h in res["today_hourly"] and h in vc_parsed["today_hourly"]:
+                if vc_parsed["today_hourly"][h] > res["today_hourly"][h]["temp"]:
+                    res["today_hourly"][h]["temp"] = vc_parsed["today_hourly"][h]
+            if h in res["hourly"] and h in vc_parsed["hourly"]:
+                if vc_parsed["hourly"][h] > res["hourly"][h]["temp"]:
+                    res["hourly"][h]["temp"] = vc_parsed["hourly"][h]
 
     return res
 
@@ -280,10 +304,10 @@ else:
     start_time_str, end_time_str, melt_start, melt_end, time_color = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00", "10:00", "16:00", "#D2691E"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.1.4")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.1.5")
 
 if w["status_code"] == 1:
-    st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 ECMWF 歐洲衛星連線正常 (主力運作中)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (ECMWF 輻射與雲量 + VC 實測高溫防禦)</div>", unsafe_allow_html=True)
 elif w["status_code"] == 2:
     st.markdown("<div class='status-banner-vc'>📡 系統狀態：🟡 ECMWF 遭遇壅塞，已無縫啟動 VC 企業備援 (數據保障中)</div>", unsafe_allow_html=True)
 else:
@@ -307,7 +331,10 @@ with c_action:
     """, unsafe_allow_html=True)
 
 with c_metrics:
-    st.markdown(f"""<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px 15px; min-height: 320px; align-content: center;"><div><div style="font-size: 15px; color: #555;">目前園區氣溫</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{temp} <span style="font-size: 16px;">°C</span></div></div><div><div style="font-size: 15px; color: #555;">明日預測最高溫</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{tmr_temp} <span style="font-size: 16px;">°C</span></div></div><div><div style="font-size: 15px; color: #555;">目前短波輻射強度</div><div style="font-size: 38px; font-weight: 700; color: #d35400;">{current_rad} <span style="font-size: 16px;">W/m²</span></div></div><div><div style="font-size: 15px; color: #555;">明日平均太陽能</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{est_solar:.1f} <span style="font-size: 16px;">kW</span></div></div><div style="background: #f0f8ff; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #17a2b8;"><div style="font-size: 14px; color: #555; font-weight: bold;">今日最危險 ({today_worst_hour})</div><div style="font-size: 38px; font-weight: 900; color: #17a2b8;">{today_max_net:.1f} <span style="font-size: 16px;">kW</span></div></div><div style="background: #ffeaea; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #dc3545;"><div style="font-size: 14px; color: #555; font-weight: bold;">明日最危險 ({worst_hour})</div><div style="font-size: 38px; font-weight: 900; color: #dc3545;">{max_net_grid_demand:.1f} <span style="font-size: 16px;">kW</span></div></div></div>""", unsafe_allow_html=True)
+    # 若有觸發高溫校正，在介面上顯示小字提示
+    cal_text = "<span style='font-size:12px; color:#d35400; margin-left:5px;'>(動態校正)</span>" if w.get("temp_is_calibrated") else ""
+    
+    st.markdown(f"""<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px 15px; min-height: 320px; align-content: center;"><div><div style="font-size: 15px; color: #555;">目前園區氣溫{cal_text}</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{temp} <span style="font-size: 16px;">°C</span></div></div><div><div style="font-size: 15px; color: #555;">明日預測最高溫</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{tmr_temp} <span style="font-size: 16px;">°C</span></div></div><div><div style="font-size: 15px; color: #555;">目前短波輻射強度</div><div style="font-size: 38px; font-weight: 700; color: #d35400;">{current_rad} <span style="font-size: 16px;">W/m²</span></div></div><div><div style="font-size: 15px; color: #555;">明日平均太陽能</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{est_solar:.1f} <span style="font-size: 16px;">kW</span></div></div><div style="background: #f0f8ff; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #17a2b8;"><div style="font-size: 14px; color: #555; font-weight: bold;">今日最危險 ({today_worst_hour})</div><div style="font-size: 38px; font-weight: 900; color: #17a2b8;">{today_max_net:.1f} <span style="font-size: 16px;">kW</span></div></div><div style="background: #ffeaea; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #dc3545;"><div style="font-size: 14px; color: #555; font-weight: bold;">明日最危險 ({worst_hour})</div><div style="font-size: 38px; font-weight: 900; color: #dc3545;">{max_net_grid_demand:.1f} <span style="font-size: 16px;">kW</span></div></div></div>""", unsafe_allow_html=True)
 
 st.markdown(f'<div class="action-call" style="background-color: {"#17a2b8" if tmr_is_holiday else "#1E3A8A"};">{action_msg}</div>', unsafe_allow_html=True)
 
@@ -383,10 +410,6 @@ if api_is_online:
 else: st.warning("📡 由於 API 暫時無法連線，系統已暫停繪製明日逐時雷達圖。")
 
 st.markdown("---")
-
-# =========================================================================
-# V3.1.4 重點修復：確保所有灰色輔助說明文字 (delta) 都完整顯示
-# =========================================================================
 st.subheader("📊 明日防禦決策基準：聚焦最嚴苛時段")
 c1, c2, c3, c4 = st.columns(4)
 if tmr_is_holiday:
