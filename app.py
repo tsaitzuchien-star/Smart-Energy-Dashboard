@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.1.8", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.1.9", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -298,24 +298,31 @@ needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
 extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0 if not tmr_is_holiday else 0.0
 
 # =========================================================================
-# V3.1.8 儲/融冰排程最佳化：退回 07:00 保障早晨需量，保留 13-19 夜尖峰融冰防禦
+# V3.1.9 融冰排程與文字雙重自動切換 (依據是否進入 5/16 夏月夜尖峰區間)
 # =========================================================================
 if tmr_is_holiday:
     suggested_ice_hrs = 0.0
-    start_time_str, end_time_str, melt_start, melt_end, time_color = "關閉排程", "關閉排程", "關閉排程", "關閉排程", "#dc3545" 
+    start_time_str, end_time_str = "關閉排程", "關閉排程"
+    melt_start, melt_end, melt_memo = "關閉排程", "關閉排程", "*明日為假日，務必手動關閉空調自動排程！"
+    time_color = "#dc3545" 
 else:
     suggested_ice_hrs = max(1.5, min(9.0, ((needed_ice_rthr_for_grid + extra_ice_rthr_for_cooling) * 1.2) / ICE_CHILLER_CAP_RT))
-    
-    # 將儲冰結束時間退回至 07:00，確保人員 07:30 進駐前，耗電怪獸 BCU-1 徹底關機
     end_minutes = 7 * 60 
     start_minutes = int(end_minutes - (suggested_ice_hrs * 60))
     if start_minutes < 0: start_minutes += 24 * 60
+    start_time_str, end_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00"
+    time_color = "#D2691E"
     
-    # 融冰時間維持 13:00 - 19:00 (覆蓋 16:00 起的夜尖峰與太陽能衰退)
-    start_time_str, end_time_str, melt_start, melt_end, time_color = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00", "13:00", "19:00", "#D2691E"
+    # 根據是否為夏月，自動切換融冰時間與說明文字
+    if is_summer_tmr:
+        melt_start, melt_end = "13:00", "19:00"
+        melt_memo = "*配合新制夜尖峰(16:00-22:00)，延後融冰防禦太陽能衰退。"
+    else:
+        melt_start, melt_end = "10:00", "16:00"
+        melt_memo = "*依 IB-1 設計 13°C 進水條件執行。"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.1.8")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.1.9")
 
 if w["status_code"] == 1:
     st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (ECMWF 輻射與雲量 + VC 實測高溫防禦)</div>", unsafe_allow_html=True)
@@ -351,11 +358,10 @@ st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
 sc1, sc2 = st.columns(2)
 with sc1:
-    memo_1 = "*明日為假日，無需儲冰備戰。" if tmr_is_holiday else "*已包含填補磁浮 70% 封印所需之額外冰量。"
+    memo_1 = "*明日為假日，無需儲冰備戰。" if tmr_is_holiday else "*善用 00:00-09:00 離峰電價，排程最晚於 08:00 結束。"
     st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間儲冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
 with sc2:
-    memo_2 = "*明日為假日，務必手動關閉空調自動排程！" if tmr_is_holiday else "*配合新制夜尖峰(16:00-22:00)，延後融冰防禦太陽能衰退。"
-    st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{memo_2}</span></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{melt_memo}</span></div>""", unsafe_allow_html=True)
 
 st.markdown("---")
 st.subheader(f"⚡ 今日關鍵時段即時追蹤 ({today_str} 現場比對專用)")
@@ -365,7 +371,7 @@ if api_is_online:
     for i, h in enumerate(target_hours):
         with h_cols_today[i]:
             header_text = f"⏰ {h}"
-            if h == "16:00":
+            if is_summer_tmr and h == "16:00":
                 header_text = "⚠️ 16:00 (夜尖峰)"
             st.markdown(f"<div style='text-align:center; font-size:18px; font-weight:bold; color:#17a2b8;'>{header_text}</div>", unsafe_allow_html=True)
             
@@ -399,7 +405,7 @@ if api_is_online:
     for i, h in enumerate(target_hours):
         with h_cols[i]:
             header_text = f"⏰ {h}"
-            if h == "16:00":
+            if is_summer_tmr and h == "16:00":
                 header_text = "⚠️ 16:00 (夜尖峰)"
             st.markdown(f"<div style='text-align:center; font-size:18px; font-weight:bold; color:#1E3A8A;'>{header_text}</div>", unsafe_allow_html=True)
             
