@@ -383,7 +383,7 @@ with sc1:
     memo_1 = "*明日為假日，無需儲冰備戰。" if tmr_is_holiday else "*善用 00:00-09:00 離峰電價，排程最晚於 07:00 結束。"
     st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間儲冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
 with sc2:
-    st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟ٹی：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{melt_memo}</span></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{melt_memo}</span></div>""", unsafe_allow_html=True)
 
 st.markdown("---")
 st.subheader(f"⚡ 今日關鍵時段即時追蹤 ({today_str} 現場比對專用)")
