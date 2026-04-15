@@ -67,7 +67,7 @@ with st.sidebar:
     else: manual_solar = 80.0
     st.markdown("---")
     st.header("🏢 動態負載微調")
-    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=70, step=5)
+    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=80, step=5)
     chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     
     st.markdown("---")
