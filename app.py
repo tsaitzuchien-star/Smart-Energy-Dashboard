@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.2.1", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.2.2", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -67,12 +67,11 @@ with st.sidebar:
     else: manual_solar = 80.0
     st.markdown("---")
     st.header("🏢 動態負載微調")
-    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=90, step=5)
+    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=70, step=5)
     chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     
     st.markdown("---")
     st.header("🎛️ 隱藏空調主機負載 (G11, GB1, GB2)")
-    # V3.2.1 依據 547.3 平方米重新校準極限範圍
     st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>547m² 挑高空間熱力學限制<br>低頻約 23kW，預估極限 37kW</div>", unsafe_allow_html=True)
     ahu_mode = st.radio("預測模式", ["🤖 溫控動態演算 (Auto)", "✋ 手動固定基載"])
     if ahu_mode == "✋ 手動固定基載":
@@ -102,6 +101,19 @@ def translate_wx(wx_en):
     if 'cloudy' in wx_en or 'overcast' in wx_en: return "陰天"
     if 'rain' in wx_en: return "降雨"
     return wx_en.capitalize()
+
+# [V3.2.2] 核心算法：雲量非線性衰減懲罰機制
+def get_cloud_penalty(status_code, c_low, c_mid):
+    if status_code == 1: # ECMWF 模型
+        if c_low > 20 or (c_low + c_mid) > 40:
+            # 低雲遮擋最嚴重 (權重0.85)，中雲次之 (權重0.45)
+            penalty = 1.0 - ((c_low * 0.85 + c_mid * 0.45) / 100.0)
+            return max(0.1, penalty) # 最嚴苛時保留 10% 的漫射光發電
+    elif status_code == 2: # VC 模型 (c_low 存放總雲量)
+        if c_low > 50:
+            penalty = 1.0 - (c_low * 0.75 / 100.0)
+            return max(0.15, penalty)
+    return 1.0
 
 # --- 3. 智慧氣象抓取 (雙源高溫動態比對機制) ---
 today_str = now_dt.strftime("%Y-%m-%d")
@@ -268,19 +280,22 @@ if api_is_online:
     for h in target_hours:
         if h in w["today_hourly"]:
             h_temp, h_rad = w["today_hourly"][h]['temp'], w["today_hourly"][h]['rad']
+            c_low, c_mid = w["today_hourly"][h].get('c_low', 0), w["today_hourly"][h].get('c_mid', 0)
             
             # [V3.2.1] AHU 排程與空間熱力學動態演算
             if h == "08:00":
                 current_ahu_load = 0.0 # 08:00 時 AHU 皆未啟動 (08:20 陸續開機)
             else:
                 if ahu_mode == "🤖 溫控動態演算 (Auto)":
-                    # 依 547平方米 空間極限，最大加載限制為 14kW，總計不超過 37kW
                     current_ahu_load = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (h_temp - 25.0) * 1.5))
                 else:
                     current_ahu_load = hidden_ahu_load
                 
+            # [V3.2.2] 雲量懲罰機制導入
+            cp = get_cloud_penalty(w["status_code"], c_low, c_mid)
+            
             h_load = 160.0 if today_is_holiday else today_base_load + today_actual_load_no_ahu + current_ahu_load + max(0, (h_temp - 25.0) * 5.5) - today_shaved_kw
-            h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) if solar_mode == "🤖 API 短波輻射精準推算" else min(manual_solar, manual_solar * (h_rad / max_rad_today_real if max_rad_today_real > 0 else 0))
+            h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) * cp if solar_mode == "🤖 API 短波輻射精準推算" else min(manual_solar, manual_solar * (h_rad / max_rad_today_real if max_rad_today_real > 0 else 0))
             h_net = h_load - h_solar
             if h_net > today_max_net:
                 today_max_net, today_worst_hour = h_net, h
@@ -288,6 +303,12 @@ else:
     tmr_ahu_blind = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (28.0 - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load
     h_load = 160.0 if today_is_holiday else today_base_load + today_actual_load_no_ahu + tmr_ahu_blind + max(0, (28.0 - 25.0) * 5.5) - today_shaved_kw
     today_max_net, today_worst_hour = h_load - (SOLAR_MAX_KW * 0.4), "斷線盲估"
+
+# [V3.2.2] 計算明日平均雲量懲罰 (用於概覽計算)
+if api_is_online and any(h in w["hourly"] for h in target_hours):
+    avg_cp = sum([get_cloud_penalty(w["status_code"], w["hourly"][h].get('c_low',0), w["hourly"][h].get('c_mid',0)) for h in target_hours if h in w["hourly"]]) / len([h for h in target_hours if h in w["hourly"]])
+else:
+    avg_cp = 1.0
 
 if tmr_is_holiday: 
     tmr_true_base_load, tmr_actual_load_growth, tmr_temp_penalty, tmr_shaved_kw = 160.0, 0.0, 0.0, 0.0
@@ -302,7 +323,7 @@ else:
     tmr_ahu_blind = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (tmr_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load
     final_predicted_demand = tmr_true_base_load + tmr_actual_load_growth + tmr_ahu_blind + tmr_temp_penalty - tmr_shaved_kw
 
-est_solar = SOLAR_MAX_KW * min(1.0, w.get("tmr_rad", 400) / 1000.0) if solar_mode == "🤖 API 短波輻射精準推算" else manual_solar
+est_solar = SOLAR_MAX_KW * min(1.0, w.get("tmr_rad", 400) / 1000.0) * avg_cp if solar_mode == "🤖 API 短波輻射精準推算" else manual_solar
 max_net_grid_demand, worst_hour, worst_hour_load, worst_hour_solar = 0.0, "未知", 0.0, 0.0
 
 if api_is_online:
@@ -310,8 +331,8 @@ if api_is_online:
     for h in target_hours:
         if h in w["hourly"]:
             h_temp, h_rad = w["hourly"][h]['temp'], w["hourly"][h]['rad']
+            c_low, c_mid = w["hourly"][h].get('c_low', 0), w["hourly"][h].get('c_mid', 0)
             
-            # [V3.2.1] AHU 排程與空間熱力學動態演算 (明日預測)
             if h == "08:00":
                 tmr_current_ahu = 0.0
             else:
@@ -320,8 +341,11 @@ if api_is_online:
                 else:
                     tmr_current_ahu = hidden_ahu_load
                 
+            # [V3.2.2] 雲量懲罰機制導入
+            cp = get_cloud_penalty(w["status_code"], c_low, c_mid)
+                
             h_load = 160.0 if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + tmr_current_ahu + max(0, (h_temp - 25.0) * 5.5) - tmr_shaved_kw
-            h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) if solar_mode == "🤖 API 短波輻射精準推算" else min(manual_solar, manual_solar * (h_rad / max_rad_tmr if max_rad_tmr > 0 else 0))
+            h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) * cp if solar_mode == "🤖 API 短波輻射精準推算" else min(manual_solar, manual_solar * (h_rad / max_rad_tmr if max_rad_tmr > 0 else 0))
             h_net = h_load - h_solar
             if h_net > max_net_grid_demand:
                 max_net_grid_demand, worst_hour, worst_hour_load, worst_hour_solar = h_net, h, h_load, h_solar
@@ -354,7 +378,7 @@ else:
         melt_memo = "*依 IB-1 設計 13°C 進水條件執行。"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.2.1")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.2.2")
 
 if w["status_code"] == 1:
     st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (ECMWF 輻射與雲量 + VC 實測高溫防禦)</div>", unsafe_allow_html=True)
@@ -410,7 +434,7 @@ if api_is_online:
             if h in w["today_hourly"]:
                 h_data = w["today_hourly"][h]
                 h_temp, h_rad = h_data['temp'], h_data['rad']
-                c_low = h_data.get('c_low',0)
+                c_low, c_mid = h_data.get('c_low',0), h_data.get('c_mid',0)
                 
                 if h == "08:00":
                     h_ahu = 0.0
@@ -419,10 +443,12 @@ if api_is_online:
                         h_ahu = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (h_temp - 25.0) * 1.5))
                     else:
                         h_ahu = hidden_ahu_load
+                        
+                cp = get_cloud_penalty(w["status_code"], c_low, c_mid)
                     
                 if today_is_holiday: h_load = 160.0
                 else: h_load = today_base_load + today_actual_load_no_ahu + h_ahu + max(0, (h_temp - 25.0) * 5.5) - today_shaved_kw
-                if solar_mode == "🤖 API 短波輻射精準推算": h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0)
+                if solar_mode == "🤖 API 短波輻射精準推算": h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) * cp
                 else: h_solar = min(manual_solar, manual_solar * (h_rad / max_rad_today_real if max_rad_today_real > 0 else 0))
                 h_net = h_load - h_solar
                 card_color = "#dc3545" if h_net > CONTRACT_LIMIT - 15 else ("#ffc107" if h_net > CONTRACT_LIMIT - 50 else "#28a745")
@@ -434,6 +460,9 @@ if api_is_online:
                     cloud_html = f"<div>☁️ 雲分布 (低/中/高)</div><div style='font-weight:bold;'>{h_data.get('c_low',0)}% / {h_data.get('c_mid',0)}% / {h_data.get('c_high',0)}%</div>"
                 else:
                     cloud_html = f"<div>☁️ 雲分布 (總雲量)</div><div style='font-weight:bold;'>{c_low}%</div>"
+                    
+                if cp < 1.0 and solar_mode == "🤖 API 短波輻射精準推算":
+                    cloud_html += f"<div style='color:#e74c3c; font-size:11px; font-weight:bold; margin-top:3px; background:#ffeaea; border-radius:4px;'>🌩️ 衰減: -{int((1-cp)*100)}%</div>"
                     
                 st.markdown(f"""<div class="hourly-card-today" style="border-left-color: {card_color};"><div class="cloud-badge">{cloud_html}</div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#b8daff; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
             else: st.write("資料擷取中...")
@@ -453,7 +482,7 @@ if api_is_online:
             if h in w["hourly"]:
                 h_data = w["hourly"][h]
                 h_temp, h_rad = h_data['temp'], h_data['rad']
-                c_low = h_data.get('c_low',0)
+                c_low, c_mid = h_data.get('c_low',0), h_data.get('c_mid',0)
                 
                 if h == "08:00":
                     h_ahu = 0.0
@@ -462,10 +491,12 @@ if api_is_online:
                         h_ahu = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (h_temp - 25.0) * 1.5))
                     else:
                         h_ahu = hidden_ahu_load
+                        
+                cp = get_cloud_penalty(w["status_code"], c_low, c_mid)
                     
                 if tmr_is_holiday: h_load = 160.0
                 else: h_load = tmr_true_base_load + tmr_actual_load_growth + h_ahu + max(0, (h_temp - 25.0) * 5.5) - tmr_shaved_kw
-                if solar_mode == "🤖 API 短波輻射精準推算": h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0)
+                if solar_mode == "🤖 API 短波輻射精準推算": h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) * cp
                 else: h_solar = min(manual_solar, manual_solar * (h_rad / max_rad_tmr if max_rad_tmr > 0 else 0))
                 h_net = h_load - h_solar
                 card_color = "#dc3545" if h_net > CONTRACT_LIMIT - 15 else ("#ffc107" if h_net > CONTRACT_LIMIT - 50 else "#28a745")
@@ -478,6 +509,9 @@ if api_is_online:
                 else:
                     cloud_html = f"<div>☁️ 雲分布 (總雲量)</div><div style='font-weight:bold;'>{c_low}%</div>"
                     
+                if cp < 1.0 and solar_mode == "🤖 API 短波輻射精準推算":
+                    cloud_html += f"<div style='color:#e74c3c; font-size:11px; font-weight:bold; margin-top:3px; background:#ffeaea; border-radius:4px;'>🌩️ 衰減: -{int((1-cp)*100)}%</div>"
+                    
                 st.markdown(f"""<div class="hourly-card" style="border-left: 4px solid {card_color};"><div class="cloud-badge">{cloud_html}</div><div style="font-size:13px; color:#555;">🏭 總負載: {h_load:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{h_solar:.1f}</div><div style="height:1px; background-color:#ddd; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {h_net:.0f} kW</div></div>""", unsafe_allow_html=True)
             else: st.write("資料擷取中...")
 else: st.warning("📡 由於 API 暫時無法連線，系統已暫停繪製明日逐時雷達圖。")
@@ -489,7 +523,6 @@ if tmr_is_holiday:
     c1.metric("非上班日基礎負載", f"{tmr_true_base_load:.1f} kW", "實測假日基本待機用電", delta_color="off")
     c2.metric("📈 動態與高溫加載", f"+0.0 kW", "假日無辦公空調需求", delta_color="off")
 else:
-    # 更新輔助說明文字，顯示含動態演算 AHU
     ahu_txt = "動態演算 AHU" if ahu_mode == "🤖 溫控動態演算 (Auto)" else "手動 AHU"
     c1.metric("歷史基礎與動態加載", f"{tmr_true_base_load + tmr_actual_load_growth + tmr_ahu_blind:.1f} kW", f"進駐率 {occupancy_rate}% + {ahu_txt}", delta_color="off")
     c2.metric("🌡️ 高溫熱負荷加載", f"+{tmr_temp_penalty:.1f} kW", f"預測高溫 {tmr_temp}°C", delta_color="off")
