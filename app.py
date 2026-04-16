@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.2.0", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.2.1", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -67,16 +67,18 @@ with st.sidebar:
     else: manual_solar = 80.0
     st.markdown("---")
     st.header("🏢 動態負載微調")
-    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=80, step=5)
+    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=70, step=5)
     chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     
     st.markdown("---")
     st.header("🎛️ 隱藏空調主機負載 (G11, GB1, GB2)")
+    # V3.2.1 依據 547.3 平方米重新校準極限範圍
+    st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>547m² 挑高空間熱力學限制<br>低頻約 23kW，預估極限 37kW</div>", unsafe_allow_html=True)
     ahu_mode = st.radio("預測模式", ["🤖 溫控動態演算 (Auto)", "✋ 手動固定基載"])
     if ahu_mode == "✋ 手動固定基載":
-        hidden_ahu_load = st.slider("預估隱藏 AHU 耗電 (kW)", min_value=0.0, max_value=78.0, value=23.0, step=1.0)
+        hidden_ahu_load = st.slider("預估隱藏 AHU 耗電 (kW)", min_value=0.0, max_value=50.0, value=23.0, step=1.0)
     else:
-        st.success("已啟用 AI 溫控與進駐率連動演算法")
+        st.success("已啟用空間熱力學與排程連動演算")
         hidden_ahu_load = 23.0 
     
     st.markdown("---")
@@ -255,7 +257,7 @@ with st.sidebar:
 # --- 4. 決策大腦運算 ---
 today_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 today_base_load = base_load_historical + today_ice_rest
-today_actual_load = 70.0 * (occupancy_rate / 100.0) 
+today_actual_load_no_ahu = 70.0 * (occupancy_rate / 100.0) 
 today_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
 today_max_net = 0.0
 today_worst_hour = "未知"
@@ -267,24 +269,29 @@ if api_is_online:
         if h in w["today_hourly"]:
             h_temp, h_rad = w["today_hourly"][h]['temp'], w["today_hourly"][h]['rad']
             
-            # [V3.2.0] AHU 動態熱負荷演算法
-            if ahu_mode == "🤖 溫控動態演算 (Auto)":
-                current_ahu_load = 23.0 + (occupancy_rate / 100.0) * min(54.6, max(0, (h_temp - 25.0) * 5.46))
+            # [V3.2.1] AHU 排程與空間熱力學動態演算
+            if h == "08:00":
+                current_ahu_load = 0.0 # 08:00 時 AHU 皆未啟動 (08:20 陸續開機)
             else:
-                current_ahu_load = hidden_ahu_load
+                if ahu_mode == "🤖 溫控動態演算 (Auto)":
+                    # 依 547平方米 空間極限，最大加載限制為 14kW，總計不超過 37kW
+                    current_ahu_load = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (h_temp - 25.0) * 1.5))
+                else:
+                    current_ahu_load = hidden_ahu_load
                 
-            h_load = 160.0 if today_is_holiday else today_base_load + today_actual_load + current_ahu_load + max(0, (h_temp - 25.0) * 5.5) - today_shaved_kw
+            h_load = 160.0 if today_is_holiday else today_base_load + today_actual_load_no_ahu + current_ahu_load + max(0, (h_temp - 25.0) * 5.5) - today_shaved_kw
             h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) if solar_mode == "🤖 API 短波輻射精準推算" else min(manual_solar, manual_solar * (h_rad / max_rad_today_real if max_rad_today_real > 0 else 0))
             h_net = h_load - h_solar
             if h_net > today_max_net:
                 today_max_net, today_worst_hour = h_net, h
 else:
-    tmr_ahu_blind = 23.0 + (occupancy_rate / 100.0) * min(54.6, max(0, (28.0 - 25.0) * 5.46)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load
-    h_load = 160.0 if today_is_holiday else today_base_load + today_actual_load + tmr_ahu_blind + max(0, (28.0 - 25.0) * 5.5) - today_shaved_kw
+    tmr_ahu_blind = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (28.0 - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load
+    h_load = 160.0 if today_is_holiday else today_base_load + today_actual_load_no_ahu + tmr_ahu_blind + max(0, (28.0 - 25.0) * 5.5) - today_shaved_kw
     today_max_net, today_worst_hour = h_load - (SOLAR_MAX_KW * 0.4), "斷線盲估"
 
 if tmr_is_holiday: 
     tmr_true_base_load, tmr_actual_load_growth, tmr_temp_penalty, tmr_shaved_kw = 160.0, 0.0, 0.0, 0.0
+    tmr_ahu_blind = 0.0
     final_predicted_demand = 160.0
 else:
     tmr_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
@@ -292,7 +299,7 @@ else:
     tmr_actual_load_growth = 70.0 * (occupancy_rate / 100.0)
     tmr_temp_penalty = max(0, (tmr_temp - 25.0) * 5.5)
     tmr_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
-    tmr_ahu_blind = 23.0 + (occupancy_rate / 100.0) * min(54.6, max(0, (tmr_temp - 25.0) * 5.46)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load
+    tmr_ahu_blind = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (tmr_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load
     final_predicted_demand = tmr_true_base_load + tmr_actual_load_growth + tmr_ahu_blind + tmr_temp_penalty - tmr_shaved_kw
 
 est_solar = SOLAR_MAX_KW * min(1.0, w.get("tmr_rad", 400) / 1000.0) if solar_mode == "🤖 API 短波輻射精準推算" else manual_solar
@@ -304,11 +311,14 @@ if api_is_online:
         if h in w["hourly"]:
             h_temp, h_rad = w["hourly"][h]['temp'], w["hourly"][h]['rad']
             
-            # [V3.2.0] AHU 動態熱負荷演算法 (明日預測)
-            if ahu_mode == "🤖 溫控動態演算 (Auto)":
-                tmr_current_ahu = 23.0 + (occupancy_rate / 100.0) * min(54.6, max(0, (h_temp - 25.0) * 5.46))
+            # [V3.2.1] AHU 排程與空間熱力學動態演算 (明日預測)
+            if h == "08:00":
+                tmr_current_ahu = 0.0
             else:
-                tmr_current_ahu = hidden_ahu_load
+                if ahu_mode == "🤖 溫控動態演算 (Auto)":
+                    tmr_current_ahu = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (h_temp - 25.0) * 1.5))
+                else:
+                    tmr_current_ahu = hidden_ahu_load
                 
             h_load = 160.0 if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + tmr_current_ahu + max(0, (h_temp - 25.0) * 5.5) - tmr_shaved_kw
             h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0) if solar_mode == "🤖 API 短波輻射精準推算" else min(manual_solar, manual_solar * (h_rad / max_rad_tmr if max_rad_tmr > 0 else 0))
@@ -344,7 +354,7 @@ else:
         melt_memo = "*依 IB-1 設計 13°C 進水條件執行。"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.2.0")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.2.1")
 
 if w["status_code"] == 1:
     st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (ECMWF 輻射與雲量 + VC 實測高溫防禦)</div>", unsafe_allow_html=True)
@@ -402,14 +412,16 @@ if api_is_online:
                 h_temp, h_rad = h_data['temp'], h_data['rad']
                 c_low = h_data.get('c_low',0)
                 
-                # 重新計算該小時的動態 AHU
-                if ahu_mode == "🤖 溫控動態演算 (Auto)":
-                    h_ahu = 23.0 + (occupancy_rate / 100.0) * min(54.6, max(0, (h_temp - 25.0) * 5.46))
+                if h == "08:00":
+                    h_ahu = 0.0
                 else:
-                    h_ahu = hidden_ahu_load
+                    if ahu_mode == "🤖 溫控動態演算 (Auto)":
+                        h_ahu = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (h_temp - 25.0) * 1.5))
+                    else:
+                        h_ahu = hidden_ahu_load
                     
                 if today_is_holiday: h_load = 160.0
-                else: h_load = today_base_load + today_actual_load + h_ahu + max(0, (h_temp - 25.0) * 5.5) - today_shaved_kw
+                else: h_load = today_base_load + today_actual_load_no_ahu + h_ahu + max(0, (h_temp - 25.0) * 5.5) - today_shaved_kw
                 if solar_mode == "🤖 API 短波輻射精準推算": h_solar = SOLAR_MAX_KW * min(1.0, h_rad / 1000.0)
                 else: h_solar = min(manual_solar, manual_solar * (h_rad / max_rad_today_real if max_rad_today_real > 0 else 0))
                 h_net = h_load - h_solar
@@ -443,10 +455,13 @@ if api_is_online:
                 h_temp, h_rad = h_data['temp'], h_data['rad']
                 c_low = h_data.get('c_low',0)
                 
-                if ahu_mode == "🤖 溫控動態演算 (Auto)":
-                    h_ahu = 23.0 + (occupancy_rate / 100.0) * min(54.6, max(0, (h_temp - 25.0) * 5.46))
+                if h == "08:00":
+                    h_ahu = 0.0
                 else:
-                    h_ahu = hidden_ahu_load
+                    if ahu_mode == "🤖 溫控動態演算 (Auto)":
+                        h_ahu = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (h_temp - 25.0) * 1.5))
+                    else:
+                        h_ahu = hidden_ahu_load
                     
                 if tmr_is_holiday: h_load = 160.0
                 else: h_load = tmr_true_base_load + tmr_actual_load_growth + h_ahu + max(0, (h_temp - 25.0) * 5.5) - tmr_shaved_kw
@@ -489,4 +504,4 @@ c7.metric("⚡ 真實最高台電需量", f"{max_net_grid_demand:.1f} kW", "作�
 c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式", delta_color="off")
 
 st.markdown("---")
-st.markdown(f"<div style='text-align: center; color: #666;'>系統運行中 | 氣象更新時間：{w['fetch_time']} | 設備參數：CHU-2(磁浮冰機) & BCU-1(儲冰主機) & IB-1(2500RT-HR) & AHU-G11 & AHU-GB1 & AHU-GB2</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='text-align: center; color: #666;'>系統運行中 | 氣象更新時間：{w['fetch_time']} | 設備參數：CHU-2(磁浮冰機) & BCU-1(儲冰主機) & IB-1(2500RT-HR) & AHU-G11 & AHU-GB1 & AHU-GB2 </div>", unsafe_allow_html=True)
