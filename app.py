@@ -491,7 +491,7 @@ st.markdown("---")
 st.subheader("📊 明日防禦決策基準：聚焦最嚴苛時段")
 c1, c2, c3, c4 = st.columns(4)
 if tmr_is_holiday:
-    c1.metric("非上班日基礎負載", f"{tmr_true_base_load:.1f} kW", "實測假日基本待機用電", delta_color="off")
+    c1.metric("非上班日基礎負載", "160.0 kW", "實測假日基本待機用電", delta_color="off")
     c2.metric("📈 動態與高溫加載", f"+0.0 kW", "假日無辦公空調需求", delta_color="off")
     c4.metric("🔥 園區絕對最高負載", "160.0 kW", "假日基本送風+活動負載" if event_ice_rthr > 0 else "假日安全負載", delta_color="off")
 else:
