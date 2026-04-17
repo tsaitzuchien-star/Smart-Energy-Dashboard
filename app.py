@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.5", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.6", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -57,9 +57,18 @@ historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530,
 base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
-    st.header("⚙️ 系統與營運參數")
-    st.info("📡 V3.5：導入場地租借防禦 (熱負荷轉儲冰與半天精算)")
+    st.info("📡 V3.6：場地租借優先置頂 & 假日省錢防禦戰略")
+    
+    # [V3.6] 租借選項移至最上方
+    st.header("📅 明日場地租借 (首要確認)")
+    st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>同仁請優先確認此項。系統會自動依據平假日與租借時長，精算最省錢的冰水防禦戰略。</div>", unsafe_allow_html=True)
+    
+    conf_hall_status = st.selectbox("國際會議廳明日活動", ["無活動 (0 RT-HR)", "半天租借 (+75 RT-HR)", "全天租借 (+150 RT-HR)"])
+    expo_hall_status = st.selectbox("展演大廳明日活動", ["無活動 (0 RT-HR)", "半天租借 (+125 RT-HR)", "全天租借 (+250 RT-HR)"])
+    
     st.markdown("---")
+    st.header("⚙️ 系統與營運參數")
+    
     st.header("🌞 太陽能預測校正")
     solar_mode = st.radio("太陽能預估模式", ["🤖 API 短波輻射精準推算", "✋ 廠務手動強制設定"])
     if solar_mode == "✋ 廠務手動強制設定":
@@ -67,7 +76,7 @@ with st.sidebar:
     else: manual_solar = 80.0
     st.markdown("---")
     st.header("🏢 動態負載微調")
-    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=100, step=5)
+    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=70, step=5)
     chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     
     st.markdown("---")
@@ -79,14 +88,6 @@ with st.sidebar:
     else:
         st.success("已啟用空間熱力學與排程連動演算")
         hidden_ahu_load = 23.0 
-        
-    st.markdown("---")
-    # [V3.5] 新增場地租借熱負荷轉換區塊 (下拉選單精算)
-    st.header("📅 明日場地租借 (冰水防禦準備)")
-    st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>依據租借時長自動折算所需冰水彈藥，避免過度儲冰產生保溫耗損。</div>", unsafe_allow_html=True)
-    
-    conf_hall_status = st.selectbox("國際會議廳明日活動", ["無活動 (0 RT-HR)", "半天租借 (+75 RT-HR)", "全天租借 (+150 RT-HR)"])
-    expo_hall_status = st.selectbox("展演大廳明日活動", ["無活動 (0 RT-HR)", "半天租借 (+125 RT-HR)", "全天租借 (+250 RT-HR)"])
     
     st.markdown("---")
     if st.button("🔄 強制同步最新氣象", use_container_width=True):
@@ -291,7 +292,7 @@ with st.sidebar:
         st.error("⚠️ 雙氣象源皆斷線")
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 決策大腦運算 (V3.5 集中運算引擎) ---
+# --- 4. 決策大腦運算 (V3.6 集中運算引擎) ---
 today_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 today_base_load = base_load_historical + today_ice_rest
 today_actual_load_no_ahu = 70.0 * (occupancy_rate / 100.0) 
@@ -311,7 +312,6 @@ if api_is_online:
     max_rad_today = max([w["today_hourly"][h]["rad"] for h in target_hours if h in w["today_hourly"]] + [1])
     max_rad_tmr = max([w["hourly"][h]["rad"] for h in target_hours if h in w["hourly"]] + [1])
     
-    # === 今日運算 ===
     for h in target_hours:
         if h in w["today_hourly"]:
             h_data = w["today_hourly"][h]
@@ -335,7 +335,6 @@ if api_is_online:
             calc_today[h] = {"temp": h_temp, "rad": h_rad, "wx": h_data['wx'], "c_low": c_low, "c_mid": c_mid, "c_high": h_data.get('c_high',0), "cp": cp, "h_solar": h_solar, "h_load": h_load, "h_net": h_net, "shading_factor": shading_factor}
             if h_net > today_max_net: today_max_net, today_worst_hour = h_net, h
 
-    # === 明日運算 ===
     for h in target_hours:
         if h in w["hourly"]:
             h_data = w["hourly"][h]
@@ -373,7 +372,7 @@ else:
     worst_hour_load, worst_hour_solar = h_load_blind, h_solar_blind
     est_solar = h_solar_blind
 
-# [V3.5] 場地租借的冰水熱負荷轉換 (精算半天/全天)
+# [V3.6] 場地租借熱負荷轉換與假日省錢判定
 event_ice_rthr = 0.0
 if "半天" in conf_hall_status: event_ice_rthr += 75.0
 elif "全天" in conf_hall_status: event_ice_rthr += 150.0
@@ -384,14 +383,21 @@ elif "全天" in expo_hall_status: event_ice_rthr += 250.0
 demand_gap = max_net_grid_demand - (CONTRACT_LIMIT - 15.0)
 needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
 extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0 if not tmr_is_holiday else 0.0
-extra_ice_rthr_for_cooling += event_ice_rthr  # 將活動熱負荷疊加至需儲備的冰水量中
+extra_ice_rthr_for_cooling += event_ice_rthr  
 
 is_pure_holiday = tmr_is_holiday and event_ice_rthr == 0.0
+is_holiday_event = tmr_is_holiday and event_ice_rthr > 0.0
 
-if is_pure_holiday:
+# V3.6: 假日且有活動時，強制歸零儲冰，改建議直供
+if is_pure_holiday or is_holiday_event:
     suggested_ice_hrs = 0.0
-    start_time_str, end_time_str, melt_start, melt_end, melt_memo = "關閉排程", "關閉排程", "關閉排程", "關閉排程", "*明日為純假日，務必手動關閉自動排程！"
-    time_color = "#dc3545" 
+    start_time_str, end_time_str = "關閉排程", "關閉排程"
+    time_color = "#dc3545" if is_pure_holiday else "#28a745"
+    
+    if is_pure_holiday:
+        melt_start, melt_end, melt_memo = "關閉排程", "關閉排程", "*明日為純假日，務必手動關閉自動排程！"
+    else: # 假日有活動
+        melt_start, melt_end, melt_memo = "停用融冰", "直供冰水", "*【省錢策略】假日全天離峰，建議直接開啟磁浮主機，免除儲冰耗損！"
 else:
     suggested_ice_hrs = max(1.5, min(9.0, ((needed_ice_rthr_for_grid + extra_ice_rthr_for_cooling) * 1.2) / ICE_CHILLER_CAP_RT))
     end_minutes = 7 * 60 
@@ -400,22 +406,20 @@ else:
     start_time_str, end_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00"
     time_color = "#D2691E"
     
-    if tmr_is_holiday:
-        melt_start, melt_end, melt_memo = "配合活動", "配合活動", "*明日為假日但有租借活動，請配合活動時段手動啟動融冰！"
-    elif is_summer_tmr: 
+    if is_summer_tmr: 
         melt_start, melt_end, melt_memo = "13:00", "19:00", "*配合新制夜尖峰(16:00-22:00)，延後融冰。"
     else: 
         melt_start, melt_end, melt_memo = "10:00", "16:00", "*依 IB-1 設計 13°C 進水條件執行。"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.5")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.6")
 
-if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.5 租借熱負荷精算運算中)</div>", unsafe_allow_html=True)
+if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.6 假日防禦精算中)</div>", unsafe_allow_html=True)
 elif w["status_code"] == 2: st.markdown("<div class='status-banner-vc'>📡 系統狀態：🟡 ECMWF 遭遇壅塞，已無縫啟動 VC 企業備援</div>", unsafe_allow_html=True)
 else: st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 雙氣象源皆斷線 (已切換至保守盲估模式)</div>", unsafe_allow_html=True)
 
 if is_pure_holiday: action_msg = f"🎉 假日停機警報：明日 ({tmr_str}) 為休息日！請【暫停今晚儲冰】，並手動解除排程。"
-elif tmr_is_holiday and not is_pure_holiday: action_msg = f"⚠️ 假日活動警報：明日有場地租借！請務必執行夜間儲冰，預先準備冰水彈藥！"
+elif is_holiday_event: action_msg = f"💡 省錢防禦啟動：明日為假日活動。白天電價極低，建議【暫停今晚儲冰】，明日直接啟動磁浮主機最划算！"
 elif suggested_ice_hrs <= 2: action_msg = f"🟢 預估明日最高需量 {max_net_grid_demand:.1f} kW，電力餘裕充足，執行例行儲冰即可。"
 elif suggested_ice_hrs <= 5: action_msg = f"🟡 預估明日最高需量 {max_net_grid_demand:.1f} kW 逼近警戒！請加強儲冰。"
 else: action_msg = f"🔴 警告：明日危險時段需量暴增至 {max_net_grid_demand:.1f} kW！嚴防超約，務必長時間儲冰！"
@@ -423,20 +427,20 @@ else: action_msg = f"🔴 警告：明日危險時段需量暴增至 {max_net_gr
 st.markdown("### 🔔 空調團隊-空調核心指令 (今晚任務)")
 c_action, c_metrics = st.columns([1.2, 1])
 with c_action:
-    border_color = "#17a2b8" if is_pure_holiday else ("#28a745" if suggested_ice_hrs <= 2 else "#ffc107" if suggested_ice_hrs <= 5 else "#dc3545")
+    border_color = "#17a2b8" if is_pure_holiday else ("#28a745" if suggested_ice_hrs <= 2 or is_holiday_event else "#ffc107" if suggested_ice_hrs <= 5 else "#dc3545")
     st.markdown(f"""<div class="ice-card" style="border: 4px solid {border_color};"><div style="font-size: 28px; color: #666; font-weight: bold; margin-bottom: 5px;">建議今晚儲冰時間</div><div class="ice-date">{display_date_full}</div><div><span class="ice-value">{suggested_ice_hrs:.1f}</span><span class="ice-unit">小時</span></div></div>""", unsafe_allow_html=True)
 
 with c_metrics:
     cal_text = "<span style='font-size:12px; color:#d35400; margin-left:5px;'>(高溫動態校正)</span>" if w.get("temp_is_calibrated") else ""
     st.markdown(f"""<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px 15px; min-height: 320px; align-content: center;"><div><div style="font-size: 15px; color: #555;">目前園區氣溫{cal_text}</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{temp} <span style="font-size: 16px;">°C</span></div></div><div><div style="font-size: 15px; color: #555;">明日預測最高溫</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{tmr_temp} <span style="font-size: 16px;">°C</span></div></div><div><div style="font-size: 15px; color: #555;">目前短波輻射強度</div><div style="font-size: 38px; font-weight: 700; color: #d35400;">{current_rad} <span style="font-size: 16px;">W/m²</span></div></div><div><div style="font-size: 15px; color: #555;">明日平均太陽能</div><div style="font-size: 38px; font-weight: 700; color: #2c3e50;">{est_solar:.1f} <span style="font-size: 16px;">kW</span></div></div><div style="background: #f0f8ff; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #17a2b8;"><div style="font-size: 14px; color: #555; font-weight: bold;">今日最危險 ({today_worst_hour})</div><div style="font-size: 38px; font-weight: 900; color: #17a2b8;">{today_max_net:.1f} <span style="font-size: 16px;">kW</span></div></div><div style="background: #ffeaea; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #dc3545;"><div style="font-size: 14px; color: #555; font-weight: bold;">明日最危險 ({worst_hour})</div><div style="font-size: 38px; font-weight: 900; color: #dc3545;">{max_net_grid_demand:.1f} <span style="font-size: 16px;">kW</span></div></div></div>""", unsafe_allow_html=True)
 
-st.markdown(f'<div class="action-call" style="background-color: {"#17a2b8" if is_pure_holiday else "#1E3A8A"};">{action_msg}</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="action-call" style="background-color: {"#17a2b8" if is_pure_holiday else "#28a745" if is_holiday_event else "#1E3A8A"};">{action_msg}</div>', unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
 sc1, sc2 = st.columns(2)
 with sc1:
-    memo_1 = "*明日為純假日，無需儲備。" if is_pure_holiday else "*最晚於 07:00 結束，避開早晨需量尖峰。"
+    memo_1 = "*明日為純假日，無需儲備。" if is_pure_holiday else ("*假日離峰，暫停儲冰。" if is_holiday_event else "*最晚於 07:00 結束，避開早晨需量尖峰。")
     st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間儲冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
 with sc2:
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{melt_memo}</span></div>""", unsafe_allow_html=True)
@@ -489,10 +493,10 @@ c1, c2, c3, c4 = st.columns(4)
 if tmr_is_holiday:
     c1.metric("非上班日基礎負載", f"{tmr_true_base_load:.1f} kW", "實測假日基本待機用電", delta_color="off")
     c2.metric("📈 動態與高溫加載", f"+0.0 kW", "假日無辦公空調需求", delta_color="off")
-    c4.metric("🔥 園區絕對最高負載", "160.0 kW", "假日基本送風+安全負載" if event_ice_rthr > 0 else "假日安全負載", delta_color="off")
+    c4.metric("🔥 園區絕對最高負載", "160.0 kW", "假日基本送風+活動負載" if event_ice_rthr > 0 else "假日安全負載", delta_color="off")
 else:
     c1.metric("歷史基礎與進駐加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"進駐率 {occupancy_rate}%", delta_color="off")
-    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.5 遮蔽降載參數", delta_color="off")
+    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.6 遮蔽降載參數", delta_color="off")
     c4.metric("🔥 園區最嚴苛總負載", f"{worst_hour_load + tmr_shaved_kw:.1f} kW", "加上防禦前的物理極限", delta_color="off")
 
 c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
