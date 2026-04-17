@@ -474,7 +474,7 @@ c1, c2, c3, c4 = st.columns(4)
 if tmr_is_holiday:
     c1.metric("非上班日基礎負載", f"{tmr_true_base_load:.1f} kW", "實測假日基本待機用電", delta_color="off")
     c2.metric("📈 動態與高溫加載", f"+0.0 kW", "假日無辦公空調需求", delta_color="off")
-    c4.metric("🔥 園區絕對最高負載", f"{h_load_blind:.1f} kW", "假日安全負載", delta_color="off")
+    c4.metric("🔥 園區絕對最高負載", "160.0 kW", "假日安全負載", delta_color="off")
 else:
     c1.metric("歷史基礎與進駐加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"進駐率 {occupancy_rate}%", delta_color="off")
     c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.3 遮蔽降載參數", delta_color="off")
