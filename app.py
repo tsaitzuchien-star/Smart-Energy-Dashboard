@@ -26,17 +26,6 @@ st.markdown("""
     .status-banner-ecmwf { background-color: #d4edda; color: #155724; padding: 12px 20px; border-radius: 8px; font-size: 18px; font-weight: bold; margin-bottom: 20px; border-left: 6px solid #28a745; }
     .status-banner-vc { background-color: #fff3cd; color: #856404; padding: 12px 20px; border-radius: 8px; font-size: 18px; font-weight: bold; margin-bottom: 20px; border-left: 6px solid #ffc107; }
     .status-banner-fail { background-color: #f8d7da; color: #721c24; padding: 12px 20px; border-radius: 8px; font-size: 18px; font-weight: bold; margin-bottom: 20px; border-left: 6px solid #dc3545; }
-
-    /* 強制置中所有的 st.metric 數據卡片 */
-    div[data-testid="stMetric"] {
-        text-align: center;
-    }
-    div[data-testid="stMetricValue"] > div {
-        justify-content: center;
-    }
-    div[data-testid="stMetricDelta"] > div {
-        justify-content: center;
-    }
     </style>
     """, unsafe_allow_html=True)
 
