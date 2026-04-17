@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.6", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.7", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -57,9 +57,8 @@ historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530,
 base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
-    st.info("📡 V3.6：場地租借優先置頂 & 假日省錢防禦戰略")
+    st.info("📡 V3.7：假日動態 UI 修復 & 活動即時耗電精算")
     
-    # [V3.6] 租借選項移至最上方
     st.header("📅 明日場地租借 (首要確認)")
     st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>同仁請優先確認此項。系統會自動依據平假日與租借時長，精算最省錢的冰水防禦戰略。</div>", unsafe_allow_html=True)
     
@@ -76,7 +75,7 @@ with st.sidebar:
     else: manual_solar = 80.0
     st.markdown("---")
     st.header("🏢 動態負載微調")
-    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=100, step=5)
+    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=70, step=5)
     chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     
     st.markdown("---")
@@ -122,7 +121,6 @@ def get_cloud_penalty(status_code, c_low, c_mid):
             return max(0.15, penalty)
     return 1.0
 
-# [V3.3] 核心算法：熱慣性平滑函數
 def get_smoothed_temp(h_str, is_tmr, w_data):
     try:
         h_int = int(h_str[:2])
@@ -177,7 +175,6 @@ def get_smart_weather():
     try:
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
         r_om = session.get(om_url, timeout=5)
-        
         if r_om.status_code == 200:
             r = r_om.json()
             res["source"] = "ECMWF"
@@ -189,12 +186,10 @@ def get_smart_weather():
             res["cloud_high"] = r['current']['cloud_cover_high']
             res["rad"] = r['current']['shortwave_radiation']
             res["temp"] = r['current']['temperature_2m']
-            
             times_list = r['hourly']['time']
             for i, t in enumerate(times_list):
                 if t.startswith(today_prefix): res["all_temps_today"][t.split("T")[1]] = r['hourly']['temperature_2m'][i]
                 elif t.startswith(tmr_prefix): res["all_temps_tmr"][t.split("T")[1]] = r['hourly']['temperature_2m'][i]
-
             for hour in target_hours:
                 t_td = f"{today_prefix}T{hour}"
                 if t_td in times_list:
@@ -204,12 +199,10 @@ def get_smart_weather():
                 if t_tm in times_list:
                     idx = times_list.index(t_tm)
                     res["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "c_low": r['hourly']['cloud_cover_low'][idx], "c_mid": r['hourly']['cloud_cover_mid'][idx], "c_high": r['hourly']['cloud_cover_high'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
-            
             try: res["tmr_temp"] = max([r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)])
             except: res["tmr_temp"] = res["hourly"].get("12:00", {}).get("temp", 28.0)
             try: res["tmr_rad"] = int(sum([r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]) / len(range(8, 17, 2)))
             except: res["tmr_rad"] = res["rad"]
-            
             ecmwf_parsed = True
     except Exception as e: print(f"ECMWF 抓取失敗: {e}")
 
@@ -218,26 +211,18 @@ def get_smart_weather():
             vc_key = st.secrets["VC_API_KEY"]
             vc_url = f"https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/{lat},{lon}?unitGroup=metric&key={vc_key}&contentType=json&elements=datetime,temp,cloudcover,solarradiation,conditions,tempmax"
             r_vc = session.get(vc_url, timeout=8)
-            
             if r_vc.status_code == 200:
                 r = r_vc.json()
-                vc_parsed = {
-                    "current_temp": r['currentConditions'].get('temp', 25.0),
-                    "tmr_temp": r['days'][1].get('tempmax', 28.0),
-                    "today_hourly": {}, "hourly": {}
-                }
+                vc_parsed = { "current_temp": r['currentConditions'].get('temp', 25.0), "tmr_temp": r['days'][1].get('tempmax', 28.0), "today_hourly": {}, "hourly": {} }
                 today_hours, tmr_hours = r['days'][0]['hours'], r['days'][1]['hours']
-                
                 for hr_data in today_hours: res["all_temps_today"][hr_data['datetime'][:5]] = hr_data.get('temp', 25.0)
                 for hr_data in tmr_hours: res["all_temps_tmr"][hr_data['datetime'][:5]] = hr_data.get('temp', 25.0)
-
                 for h in target_hours:
                     vc_time = h + ":00"
                     for hr_data in today_hours:
                         if hr_data['datetime'] == vc_time: vc_parsed["today_hourly"][h] = hr_data.get('temp', 25.0)
                     for hr_data in tmr_hours:
                         if hr_data['datetime'] == vc_time: vc_parsed["hourly"][h] = hr_data.get('temp', 25.0)
-
                 if not ecmwf_parsed:
                     res["source"] = "VC"
                     res["status_code"] = 2
@@ -248,14 +233,12 @@ def get_smart_weather():
                     res["rad"] = curr.get('solarradiation', 0)
                     res["temp"] = vc_parsed["current_temp"]
                     res["tmr_temp"] = vc_parsed["tmr_temp"]
-                    
                     for h in target_hours:
                         vc_time = h + ":00"
                         for hr_data in today_hours:
                             if hr_data['datetime'] == vc_time: res["today_hourly"][h] = {"temp": hr_data.get('temp', 25.0), "rad": hr_data.get('solarradiation', 0), "c_low": hr_data.get('cloudcover', 0), "c_mid": 0, "c_high": 0, "wx": translate_wx(hr_data.get('conditions', ''))}
                         for hr_data in tmr_hours:
                             if hr_data['datetime'] == vc_time: res["hourly"][h] = {"temp": hr_data.get('temp', 25.0), "rad": hr_data.get('solarradiation', 0), "c_low": hr_data.get('cloudcover', 0), "c_mid": 0, "c_high": 0, "wx": translate_wx(hr_data.get('conditions', ''))}
-                    
                     tmr_rads = [res["hourly"][h]["rad"] for h in res["hourly"] if "rad" in res["hourly"][h]]
                     if tmr_rads: res["tmr_rad"] = sum(tmr_rads) / len(tmr_rads)
         except Exception as e: print(f"VC 抓取失敗: {e}")
@@ -292,7 +275,7 @@ with st.sidebar:
         st.error("⚠️ 雙氣象源皆斷線")
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 決策大腦運算 (V3.6 集中運算引擎) ---
+# --- 4. 決策大腦運算 (V3.7 集中運算引擎) ---
 today_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 today_base_load = base_load_historical + today_ice_rest
 today_actual_load_no_ahu = 70.0 * (occupancy_rate / 100.0) 
@@ -302,6 +285,17 @@ tmr_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 tmr_true_base_load = base_load_historical + tmr_ice_rest
 tmr_actual_load_growth = 70.0 * (occupancy_rate / 100.0)
 tmr_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
+
+# [V3.7] 解析場地租借熱負荷，並攤算為實質運轉耗電 (kW)
+event_ice_rthr = 0.0
+if "半天" in conf_hall_status: event_ice_rthr += 75.0
+elif "全天" in conf_hall_status: event_ice_rthr += 150.0
+
+if "半天" in expo_hall_status: event_ice_rthr += 125.0
+elif "全天" in expo_hall_status: event_ice_rthr += 250.0
+
+# 假設活動分佈於 6 小時的尖峰用冷期間，精算實際會增加的主機耗電
+event_kw = (event_ice_rthr / 6.0) * MAG_EFF if event_ice_rthr > 0 else 0.0
 
 target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
 calc_today, calc_tmr = {}, {}
@@ -352,7 +346,8 @@ if api_is_online:
             h_ahu = 0.0 if h == "08:00" else (23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (smoothed_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load)
             dynamic_load = (h_ahu + max(0, (smoothed_temp - 25.0) * 5.5)) * shading_factor
             
-            h_load = 160.0 if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + dynamic_load - tmr_shaved_kw
+            # [V3.7] 假日若有活動，真實疊加精算後的活動耗電 (event_kw)
+            h_load = (160.0 + event_kw) if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + dynamic_load - tmr_shaved_kw
             h_net = h_load - h_solar
             
             calc_tmr[h] = {"temp": h_temp, "rad": h_rad, "wx": h_data['wx'], "c_low": c_low, "c_mid": c_mid, "c_high": h_data.get('c_high',0), "cp": cp, "h_solar": h_solar, "h_load": h_load, "h_net": h_net, "shading_factor": shading_factor}
@@ -365,20 +360,14 @@ else:
     shading_factor_blind = 0.5 if h_solar_blind < 20.0 else (0.7 if h_solar_blind < 50.0 else 1.0)
     
     tmr_ahu_blind = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (28.0 - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load
-    h_load_blind = 160.0 if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + (tmr_ahu_blind + max(0, (28.0 - 25.0) * 5.5)) * shading_factor_blind - tmr_shaved_kw
+    
+    # [V3.7] 斷線時也必須支援假日活動耗電
+    h_load_blind = (160.0 + event_kw) if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + (tmr_ahu_blind + max(0, (28.0 - 25.0) * 5.5)) * shading_factor_blind - tmr_shaved_kw
     
     today_max_net, today_worst_hour = h_load_blind - h_solar_blind, "斷線盲估"
     max_net_grid_demand, worst_hour = h_load_blind - h_solar_blind, "斷線盲估"
     worst_hour_load, worst_hour_solar = h_load_blind, h_solar_blind
     est_solar = h_solar_blind
-
-# [V3.6] 場地租借熱負荷轉換與假日省錢判定
-event_ice_rthr = 0.0
-if "半天" in conf_hall_status: event_ice_rthr += 75.0
-elif "全天" in conf_hall_status: event_ice_rthr += 150.0
-
-if "半天" in expo_hall_status: event_ice_rthr += 125.0
-elif "全天" in expo_hall_status: event_ice_rthr += 250.0
 
 demand_gap = max_net_grid_demand - (CONTRACT_LIMIT - 15.0)
 needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
@@ -388,7 +377,6 @@ extra_ice_rthr_for_cooling += event_ice_rthr
 is_pure_holiday = tmr_is_holiday and event_ice_rthr == 0.0
 is_holiday_event = tmr_is_holiday and event_ice_rthr > 0.0
 
-# V3.6: 假日且有活動時，強制歸零儲冰，改建議直供
 if is_pure_holiday or is_holiday_event:
     suggested_ice_hrs = 0.0
     start_time_str, end_time_str = "關閉排程", "關閉排程"
@@ -396,7 +384,7 @@ if is_pure_holiday or is_holiday_event:
     
     if is_pure_holiday:
         melt_start, melt_end, melt_memo = "關閉排程", "關閉排程", "*明日為純假日，務必手動關閉自動排程！"
-    else: # 假日有活動
+    else:
         melt_start, melt_end, melt_memo = "停用融冰", "直供冰水", "*【省錢策略】假日全天離峰，建議直接開啟磁浮主機，免除儲冰耗損！"
 else:
     suggested_ice_hrs = max(1.5, min(9.0, ((needed_ice_rthr_for_grid + extra_ice_rthr_for_cooling) * 1.2) / ICE_CHILLER_CAP_RT))
@@ -412,9 +400,9 @@ else:
         melt_start, melt_end, melt_memo = "10:00", "16:00", "*依 IB-1 設計 13°C 進水條件執行。"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.6")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.7")
 
-if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.6 假日防禦精算中)</div>", unsafe_allow_html=True)
+if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.7 假日防禦精算中)</div>", unsafe_allow_html=True)
 elif w["status_code"] == 2: st.markdown("<div class='status-banner-vc'>📡 系統狀態：🟡 ECMWF 遭遇壅塞，已無縫啟動 VC 企業備援</div>", unsafe_allow_html=True)
 else: st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 雙氣象源皆斷線 (已切換至保守盲估模式)</div>", unsafe_allow_html=True)
 
@@ -490,16 +478,18 @@ else: st.warning("📡 API 暫時斷線。")
 st.markdown("---")
 st.subheader("📊 明日防禦決策基準：聚焦最嚴苛時段")
 c1, c2, c3, c4 = st.columns(4)
+
+# [V3.7] 修正此區塊：動態切換平假日 UI 顯示邏輯
 if tmr_is_holiday:
     c1.metric("非上班日基礎負載", "160.0 kW", "實測假日基本待機用電", delta_color="off")
-    c2.metric("📈 動態與高溫加載", f"+0.0 kW", "假日無辦公空調需求", delta_color="off")
-    c4.metric("🔥 園區絕對最高負載", "160.0 kW", "假日基本送風+活動負載" if event_ice_rthr > 0 else "假日安全負載", delta_color="off")
+    c2.metric("📈 假日活動空調加載", f"+{event_kw:.1f} kW", f"磁浮直供 ({event_ice_rthr} RT-HR)" if event_kw > 0 else "無租借活動", delta_color="off" if event_kw == 0 else "normal")
+    c4.metric("🔥 園區絕對最高負載", f"{(160.0 + event_kw):.1f} kW", "假日基本送風+活動耗電" if event_kw > 0 else "假日安全負載", delta_color="off")
+    c3.metric("🛡️ 磁浮降載防禦", "-0.0 kW", "假日未達主機上限無需降載", delta_color="off")
 else:
     c1.metric("歷史基礎與進駐加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"進駐率 {occupancy_rate}%", delta_color="off")
-    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.6 遮蔽降載參數", delta_color="off")
+    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.7 遮蔽降載參數", delta_color="off")
     c4.metric("🔥 園區最嚴苛總負載", f"{worst_hour_load + tmr_shaved_kw:.1f} kW", "加上防禦前的物理極限", delta_color="off")
-
-c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
+    c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
 
 c5, c6, c7, c8 = st.columns(4)
 c5.metric(f"🔥 {worst_hour} 防禦後負載", f"{worst_hour_load:.1f} kW", "該時段之真實耗能", delta_color="off")
