@@ -9,7 +9,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.4", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.5", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -58,7 +58,7 @@ base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
     st.header("⚙️ 系統與營運參數")
-    st.info("📡 V3.4：導入場地租借防禦 (熱負荷轉儲冰)")
+    st.info("📡 V3.5：導入場地租借防禦 (熱負荷轉儲冰與半天精算)")
     st.markdown("---")
     st.header("🌞 太陽能預測校正")
     solar_mode = st.radio("太陽能預估模式", ["🤖 API 短波輻射精準推算", "✋ 廠務手動強制設定"])
@@ -81,11 +81,12 @@ with st.sidebar:
         hidden_ahu_load = 23.0 
         
     st.markdown("---")
-    # [V3.4] 新增場地租借熱負荷轉換區塊
+    # [V3.5] 新增場地租借熱負荷轉換區塊 (下拉選單精算)
     st.header("📅 明日場地租借 (冰水防禦準備)")
-    st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>此區不直接增加 kW 需量預估，而是連動延長今晚儲冰時數，預先囤積活動所需之冰水彈藥。</div>", unsafe_allow_html=True)
-    conf_hall_active = st.checkbox("國際會議廳明日有活動 (+150 RT-HR)")
-    expo_hall_active = st.checkbox("展演大廳明日有活動 (+250 RT-HR)")
+    st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>依據租借時長自動折算所需冰水彈藥，避免過度儲冰產生保溫耗損。</div>", unsafe_allow_html=True)
+    
+    conf_hall_status = st.selectbox("國際會議廳明日活動", ["無活動 (0 RT-HR)", "半天租借 (+75 RT-HR)", "全天租借 (+150 RT-HR)"])
+    expo_hall_status = st.selectbox("展演大廳明日活動", ["無活動 (0 RT-HR)", "半天租借 (+125 RT-HR)", "全天租借 (+250 RT-HR)"])
     
     st.markdown("---")
     if st.button("🔄 強制同步最新氣象", use_container_width=True):
@@ -290,7 +291,7 @@ with st.sidebar:
         st.error("⚠️ 雙氣象源皆斷線")
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 決策大腦運算 (V3.4 集中運算引擎) ---
+# --- 4. 決策大腦運算 (V3.5 集中運算引擎) ---
 today_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 today_base_load = base_load_historical + today_ice_rest
 today_actual_load_no_ahu = 70.0 * (occupancy_rate / 100.0) 
@@ -372,10 +373,13 @@ else:
     worst_hour_load, worst_hour_solar = h_load_blind, h_solar_blind
     est_solar = h_solar_blind
 
-# [V3.4] 場地租借的冰水熱負荷轉換
+# [V3.5] 場地租借的冰水熱負荷轉換 (精算半天/全天)
 event_ice_rthr = 0.0
-if conf_hall_active: event_ice_rthr += 150.0
-if expo_hall_active: event_ice_rthr += 250.0
+if "半天" in conf_hall_status: event_ice_rthr += 75.0
+elif "全天" in conf_hall_status: event_ice_rthr += 150.0
+
+if "半天" in expo_hall_status: event_ice_rthr += 125.0
+elif "全天" in expo_hall_status: event_ice_rthr += 250.0
 
 demand_gap = max_net_grid_demand - (CONTRACT_LIMIT - 15.0)
 needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
@@ -404,9 +408,9 @@ else:
         melt_start, melt_end, melt_memo = "10:00", "16:00", "*依 IB-1 設計 13°C 進水條件執行。"
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.4")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.5")
 
-if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.4 租借熱負荷轉換運算中)</div>", unsafe_allow_html=True)
+if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.5 租借熱負荷精算運算中)</div>", unsafe_allow_html=True)
 elif w["status_code"] == 2: st.markdown("<div class='status-banner-vc'>📡 系統狀態：🟡 ECMWF 遭遇壅塞，已無縫啟動 VC 企業備援</div>", unsafe_allow_html=True)
 else: st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 雙氣象源皆斷線 (已切換至保守盲估模式)</div>", unsafe_allow_html=True)
 
@@ -488,7 +492,7 @@ if tmr_is_holiday:
     c4.metric("🔥 園區絕對最高負載", "160.0 kW", "假日基本送風+安全負載" if event_ice_rthr > 0 else "假日安全負載", delta_color="off")
 else:
     c1.metric("歷史基礎與進駐加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"進駐率 {occupancy_rate}%", delta_color="off")
-    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.4 遮蔽降載參數", delta_color="off")
+    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.5 遮蔽降載參數", delta_color="off")
     c4.metric("🔥 園區最嚴苛總負載", f"{worst_hour_load + tmr_shaved_kw:.1f} kW", "加上防禦前的物理極限", delta_color="off")
 
 c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
