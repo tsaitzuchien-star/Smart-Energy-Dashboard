@@ -25,7 +25,7 @@ def check_password():
             submit_btn = st.form_submit_button("✅ 確認登入", use_container_width=True)
             
         if submit_btn:
-            if pwd == "CTIC2026!":
+            if pwd == "ASCH300!":
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
