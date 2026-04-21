@@ -8,8 +8,28 @@ from datetime import datetime, timedelta, timezone
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TW_TZ = timezone(timedelta(hours=8))
 
+# --- 0. 戰情室機密登入防護 ---
+def check_password():
+    """驗證密碼，若正確才允許顯示後續內容"""
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if not st.session_state["password_correct"]:
+        st.markdown("<h2 style='text-align: center;'>🔒 中創園區空調戰情室</h2>", unsafe_allow_html=True)
+        pwd = st.text_input("請輸入廠務部專屬授權碼：", type="password")
+        if pwd == "ASCH300!":
+            st.session_state["password_correct"] = True
+            st.rerun()
+        elif pwd != "":
+            st.error("❌ 授權碼錯誤，拒絕存取。")
+        return False
+    return True
+
+if not check_password():
+    st.stop()
+
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.7", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.8", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -26,6 +46,17 @@ st.markdown("""
     .status-banner-ecmwf { background-color: #d4edda; color: #155724; padding: 12px 20px; border-radius: 8px; font-size: 18px; font-weight: bold; margin-bottom: 20px; border-left: 6px solid #28a745; }
     .status-banner-vc { background-color: #fff3cd; color: #856404; padding: 12px 20px; border-radius: 8px; font-size: 18px; font-weight: bold; margin-bottom: 20px; border-left: 6px solid #ffc107; }
     .status-banner-fail { background-color: #f8d7da; color: #721c24; padding: 12px 20px; border-radius: 8px; font-size: 18px; font-weight: bold; margin-bottom: 20px; border-left: 6px solid #dc3545; }
+
+    /* 強制置中所有的 st.metric 數據卡片 */
+    div[data-testid="stMetric"] {
+        text-align: center;
+    }
+    div[data-testid="stMetricValue"] > div {
+        justify-content: center;
+    }
+    div[data-testid="stMetricDelta"] > div {
+        justify-content: center;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -57,7 +88,7 @@ historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530,
 base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
-    st.info("📡 V3.7：假日動態 UI 修復 & 活動即時耗電精算")
+    st.info("📡 V3.8：機密登入防護 & Line Notify 警報系統")
     
     st.header("📅 明日場地租借 (首要確認)")
     st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>同仁請優先確認此項。系統會自動依據平假日與租借時長，精算最省錢的冰水防禦戰略。</div>", unsafe_allow_html=True)
@@ -75,7 +106,7 @@ with st.sidebar:
     else: manual_solar = 80.0
     st.markdown("---")
     st.header("🏢 動態負載微調")
-    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=100, step=5)
+    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=70, step=5)
     chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     
     st.markdown("---")
@@ -89,6 +120,12 @@ with st.sidebar:
         hidden_ahu_load = 23.0 
     
     st.markdown("---")
+    st.header("🚨 Line 預警推播系統")
+    enable_line_notify = st.toggle("啟動超約防禦警報", value=False)
+    line_token = ""
+    if enable_line_notify:
+        line_token = st.text_input("請輸入 Line Notify Token", type="password", placeholder="貼上您的 Token...")
+
     if st.button("🔄 強制同步最新氣象", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -109,6 +146,18 @@ def translate_wx(wx_en):
     if 'cloudy' in wx_en or 'overcast' in wx_en: return "陰天"
     if 'rain' in wx_en: return "降雨"
     return wx_en.capitalize()
+
+def send_line_notify(token, message):
+    if not token:
+        return False
+    url = 'https://notify-api.line.me/api/notify'
+    headers = {'Authorization': f'Bearer {token}'}
+    data = {'message': message}
+    try:
+        response = requests.post(url, headers=headers, data=data, timeout=5)
+        return response.status_code == 200
+    except:
+        return False
 
 def get_cloud_penalty(status_code, c_low, c_mid):
     if status_code == 1: 
@@ -275,7 +324,7 @@ with st.sidebar:
         st.error("⚠️ 雙氣象源皆斷線")
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 決策大腦運算 (V3.7 集中運算引擎) ---
+# --- 4. 決策大腦運算 (V3.8 集中運算引擎) ---
 today_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 today_base_load = base_load_historical + today_ice_rest
 today_actual_load_no_ahu = 70.0 * (occupancy_rate / 100.0) 
@@ -286,7 +335,7 @@ tmr_true_base_load = base_load_historical + tmr_ice_rest
 tmr_actual_load_growth = 70.0 * (occupancy_rate / 100.0)
 tmr_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
 
-# [V3.7] 解析場地租借熱負荷，並攤算為實質運轉耗電 (kW)
+# 解析場地租借熱負荷，並攤算為實質運轉耗電 (kW)
 event_ice_rthr = 0.0
 if "半天" in conf_hall_status: event_ice_rthr += 75.0
 elif "全天" in conf_hall_status: event_ice_rthr += 150.0
@@ -346,7 +395,6 @@ if api_is_online:
             h_ahu = 0.0 if h == "08:00" else (23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (smoothed_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load)
             dynamic_load = (h_ahu + max(0, (smoothed_temp - 25.0) * 5.5)) * shading_factor
             
-            # [V3.7] 假日若有活動，真實疊加精算後的活動耗電 (event_kw)
             h_load = (160.0 + event_kw) if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + dynamic_load - tmr_shaved_kw
             h_net = h_load - h_solar
             
@@ -361,7 +409,6 @@ else:
     
     tmr_ahu_blind = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (28.0 - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load
     
-    # [V3.7] 斷線時也必須支援假日活動耗電
     h_load_blind = (160.0 + event_kw) if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + (tmr_ahu_blind + max(0, (28.0 - 25.0) * 5.5)) * shading_factor_blind - tmr_shaved_kw
     
     today_max_net, today_worst_hour = h_load_blind - h_solar_blind, "斷線盲估"
@@ -399,10 +446,33 @@ else:
     else: 
         melt_start, melt_end, melt_memo = "10:00", "16:00", "*依 IB-1 設計 13°C 進水條件執行。"
 
-# --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.7")
+# --- [V3.8] Line Notify 超約預警觸發邏輯 ---
+if enable_line_notify and line_token and api_is_online:
+    # 防止重新載入時重複發送
+    if "line_alert_sent" not in st.session_state:
+        st.session_state["line_alert_sent"] = False
+        
+    if max_net_grid_demand >= (CONTRACT_LIMIT - 10.0) and not st.session_state["line_alert_sent"]:
+        now_str = datetime.now(TW_TZ).strftime("%Y-%m-%d %H:%M")
+        alert_msg = f"""
+🚨 【需量超約預警】 🚨
+時間：{now_str}
+-----------------------
+⚠️ 明日 {worst_hour} 預估需量將達 {max_net_grid_demand:.1f} kW！
+🛑 距離契約極限 {CONTRACT_LIMIT} kW 僅剩 {(CONTRACT_LIMIT - max_net_grid_demand):.1f} kW 緩衝！
 
-if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.7 假日防禦精算中)</div>", unsafe_allow_html=True)
+💡 建議處置：
+1. 請確認今晚儲冰排程已設定為最長時數。
+2. 明日 {worst_hour} 前，請廠務人員待命，準備手動卸載變頻器設定溫度。
+"""
+        if send_line_notify(line_token, alert_msg):
+            st.session_state["line_alert_sent"] = True
+            st.toast("✅ 已成功發送 Line 超約警報至廠務群組！", icon="🚨")
+
+# --- 5. 渲染 UI ---
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.8")
+
+if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.8 加密防禦運算中)</div>", unsafe_allow_html=True)
 elif w["status_code"] == 2: st.markdown("<div class='status-banner-vc'>📡 系統狀態：🟡 ECMWF 遭遇壅塞，已無縫啟動 VC 企業備援</div>", unsafe_allow_html=True)
 else: st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 雙氣象源皆斷線 (已切換至保守盲估模式)</div>", unsafe_allow_html=True)
 
@@ -479,7 +549,6 @@ st.markdown("---")
 st.subheader("📊 明日防禦決策基準：聚焦最嚴苛時段")
 c1, c2, c3, c4 = st.columns(4)
 
-# [V3.7] 修正此區塊：動態切換平假日 UI 顯示邏輯
 if tmr_is_holiday:
     c1.metric("非上班日基礎負載", "160.0 kW", "實測假日基本待機用電", delta_color="off")
     c2.metric("📈 假日活動空調加載", f"+{event_kw:.1f} kW", f"磁浮直供 ({event_ice_rthr} RT-HR)" if event_kw > 0 else "無租借活動", delta_color="off" if event_kw == 0 else "normal")
@@ -487,7 +556,7 @@ if tmr_is_holiday:
     c3.metric("🛡️ 磁浮降載防禦", "-0.0 kW", "假日未達主機上限無需降載", delta_color="off")
 else:
     c1.metric("歷史基礎與進駐加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"進駐率 {occupancy_rate}%", delta_color="off")
-    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.7 遮蔽降載參數", delta_color="off")
+    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.8 遮蔽降載參數", delta_color="off")
     c4.metric("🔥 園區最嚴苛總負載", f"{worst_hour_load + tmr_shaved_kw:.1f} kW", "加上防禦前的物理極限", delta_color="off")
     c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
 
