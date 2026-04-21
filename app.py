@@ -17,7 +17,7 @@ def check_password():
     if not st.session_state["password_correct"]:
         st.markdown("<h2 style='text-align: center;'>🔒 中創園區空調戰情室</h2>", unsafe_allow_html=True)
         pwd = st.text_input("請輸入廠務部專屬授權碼：", type="password")
-        if pwd == "CTIC2026!":
+        if pwd == "ASCH300!":
             st.session_state["password_correct"] = True
             st.rerun()
         elif pwd != "":
