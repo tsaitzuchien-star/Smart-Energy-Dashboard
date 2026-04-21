@@ -15,13 +15,21 @@ def check_password():
         st.session_state["password_correct"] = False
 
     if not st.session_state["password_correct"]:
-        st.markdown("<h2 style='text-align: center;'>🔒 中創園區空調戰情室</h2>", unsafe_allow_html=True)
-        pwd = st.text_input("請輸入廠務部專屬授權碼：", type="password")
-        if pwd == "ASCH300!":
-            st.session_state["password_correct"] = True
-            st.rerun()
-        elif pwd != "":
-            st.error("❌ 授權碼錯誤，拒絕存取。")
+        # 增加一點上下間距讓登入畫面更好看
+        st.markdown("<br><br><h2 style='text-align: center; color: #1E3A8A; margin-bottom: 20px;'>🔒 中創園區空調戰情室</h2>", unsafe_allow_html=True)
+        
+        # 建立一個表單區塊，讓輸入框跟按鈕綁定在一起
+        with st.form("login_form"):
+            pwd = st.text_input("請輸入廠務部專屬授權碼：", type="password", placeholder="請輸入密碼...")
+            # 加上醒目的滿版確認按鈕
+            submit_btn = st.form_submit_button("✅ 確認登入", use_container_width=True)
+            
+        if submit_btn:
+            if pwd == "CTIC2026!":
+                st.session_state["password_correct"] = True
+                st.rerun()
+            else:
+                st.error("❌ 授權碼錯誤，請重新輸入。")
         return False
     return True
 
@@ -29,7 +37,7 @@ if not check_password():
     st.stop()
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.9", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.9.1", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -77,7 +85,7 @@ historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530,
 base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
-    st.info("📡 V3.9：機密登入防護 & Line Notify 警報系統")
+    st.info("📡 V3.9.1：機密登入防護 & Line Notify 警報系統")
     
     st.header("📅 明日場地租借 (首要確認)")
     st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>同仁請優先確認此項。系統會自動依據平假日與租借時長，精算最省錢的冰水防禦戰略。</div>", unsafe_allow_html=True)
@@ -437,7 +445,6 @@ else:
 
 # --- [V3.9] Line Notify 超約預警觸發邏輯 ---
 if enable_line_notify and line_token and api_is_online:
-    # 防止重新載入時重複發送
     if "line_alert_sent" not in st.session_state:
         st.session_state["line_alert_sent"] = False
         
@@ -459,7 +466,7 @@ if enable_line_notify and line_token and api_is_online:
             st.toast("✅ 已成功發送 Line 超約警報至廠務群組！", icon="🚨")
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.9")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.9.1")
 
 if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.9 加密防禦運算中)</div>", unsafe_allow_html=True)
 elif w["status_code"] == 2: st.markdown("<div class='status-banner-vc'>📡 系統狀態：🟡 ECMWF 遭遇壅塞，已無縫啟動 VC 企業備援</div>", unsafe_allow_html=True)
