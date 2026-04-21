@@ -20,7 +20,7 @@ def check_password():
         
         # 建立一個表單區塊，讓輸入框跟按鈕綁定在一起
         with st.form("login_form"):
-            pwd = st.text_input("請輸入廠務部專屬授權碼：", type="password", placeholder="請輸入密碼...")
+            pwd = st.text_input("請輸入H300專屬授權碼：", type="password", placeholder="請輸入密碼...")
             # 加上醒目的滿版確認按鈕
             submit_btn = st.form_submit_button("✅ 確認登入", use_container_width=True)
             
