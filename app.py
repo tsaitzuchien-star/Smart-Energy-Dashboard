@@ -15,13 +15,10 @@ def check_password():
         st.session_state["password_correct"] = False
 
     if not st.session_state["password_correct"]:
-        # 增加一點上下間距讓登入畫面更好看
         st.markdown("<br><br><h2 style='text-align: center; color: #1E3A8A; margin-bottom: 20px;'>🔒 中創園區空調戰情室</h2>", unsafe_allow_html=True)
         
-        # 建立一個表單區塊，讓輸入框跟按鈕綁定在一起
         with st.form("login_form"):
             pwd = st.text_input("請輸入H300專屬授權碼：", type="password", placeholder="請輸入密碼...")
-            # 加上醒目的滿版確認按鈕
             submit_btn = st.form_submit_button("✅ 確認登入", use_container_width=True)
             
         if submit_btn:
@@ -37,7 +34,7 @@ if not check_password():
     st.stop()
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.9.1", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.9.2", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -63,13 +60,22 @@ ICE_CHILLER_CAP_RT = 242.5
 ICE_BANK_MAX_RTHR = 2500.0   
 
 MAG_CHILLER_RT = 200.0       
-MAG_CAP_LIMIT = 0.70         
+# 【升級 3.9.2】：防禦緊縮，磁浮主機最高鎖定在 50% 負載
+MAG_CAP_LIMIT = 0.50         
 MAG_EFF = 0.7                
 SOLAR_MAX_KW = 145.0         
 
 now_dt = datetime.now(TW_TZ)
 tmr_dt = now_dt + timedelta(days=1)
 current_month = now_dt.month
+
+is_summer_today = False
+if 6 <= now_dt.month <= 9:
+    is_summer_today = True
+elif now_dt.month == 5 and now_dt.day >= 16:
+    is_summer_today = True
+elif now_dt.month == 10 and now_dt.day <= 15:
+    is_summer_today = True
 
 is_summer_tmr = False
 if 6 <= tmr_dt.month <= 9:
@@ -85,7 +91,7 @@ historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530,
 base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
-    st.info("📡 V3.9.1：機密登入防護 & Line Notify 警報系統")
+    st.info("📡 V3.9.2：50%極限防禦 & 18:00自動卸載邏輯")
     
     st.header("📅 明日場地租借 (首要確認)")
     st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>同仁請優先確認此項。系統會自動依據平假日與租借時長，精算最省錢的冰水防禦戰略。</div>", unsafe_allow_html=True)
@@ -96,15 +102,23 @@ with st.sidebar:
     st.markdown("---")
     st.header("⚙️ 系統與營運參數")
     
+    st.header("🏢 動態負載微調")
+    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=100, step=5)
+    
+    # 【新增 3.9.2】加班狀態預測選單
+    overtime_status = st.radio("今日廠商加班預測", [
+        "🌇 18:00 準時下班 (啟動夜間降載)", 
+        "🌙 19:30 晚間加班 (維持基礎供應)"
+    ])
+    
+    chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
+    
+    st.markdown("---")
     st.header("🌞 太陽能預測校正")
     solar_mode = st.radio("太陽能預估模式", ["🤖 API 短波輻射精準推算", "✋ 廠務手動強制設定"])
     if solar_mode == "✋ 廠務手動強制設定":
         manual_solar = st.slider("手動設定巔峰太陽能 (kW)", min_value=0.0, max_value=SOLAR_MAX_KW, value=80.0, step=1.0)
     else: manual_solar = 80.0
-    st.markdown("---")
-    st.header("🏢 動態負載微調")
-    occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=100, step=5)
-    chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
     
     st.markdown("---")
     st.header("🎛️ 隱藏空調主機負載 (G11, GB1, GB2)")
@@ -206,7 +220,8 @@ def get_smart_weather():
     today_prefix = datetime.now(TW_TZ).strftime("%Y-%m-%d")
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     lat, lon = "23.936537", "120.697917"
-    target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
+    # 【新增 3.9.2】加入 18:00 進入觀測範圍，展示斷崖式降載
+    target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]
     
     from requests.adapters import HTTPAdapter
     from urllib3.util.retry import Retry
@@ -321,7 +336,7 @@ with st.sidebar:
         st.error("⚠️ 雙氣象源皆斷線")
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 決策大腦運算 (V3.9 集中運算引擎) ---
+# --- 4. 決策大腦運算 (V3.9.2 分時與加班卸載運算引擎) ---
 today_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 today_base_load = base_load_historical + today_ice_rest
 today_actual_load_no_ahu = 70.0 * (occupancy_rate / 100.0) 
@@ -332,7 +347,6 @@ tmr_true_base_load = base_load_historical + tmr_ice_rest
 tmr_actual_load_growth = 70.0 * (occupancy_rate / 100.0)
 tmr_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
 
-# 解析場地租借熱負荷，並攤算為實質運轉耗電 (kW)
 event_ice_rthr = 0.0
 if "半天" in conf_hall_status: event_ice_rthr += 75.0
 elif "全天" in conf_hall_status: event_ice_rthr += 150.0
@@ -340,18 +354,22 @@ elif "全天" in conf_hall_status: event_ice_rthr += 150.0
 if "半天" in expo_hall_status: event_ice_rthr += 125.0
 elif "全天" in expo_hall_status: event_ice_rthr += 250.0
 
-# 假設活動分佈於 6 小時的尖峰用冷期間，精算實際會增加的主機耗電
 event_kw = (event_ice_rthr / 6.0) * MAG_EFF if event_ice_rthr > 0 else 0.0
 
-target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00"]
+target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]
 calc_today, calc_tmr = {}, {}
+today_max_gap = -9999.0
 today_max_net, today_worst_hour = 0.0, "未知"
+
+tmr_max_gap = -9999.0
 max_net_grid_demand, worst_hour, worst_hour_load, worst_hour_solar = 0.0, "未知", 0.0, 0.0
+worst_limit_tmr = 516.0 
 
 if api_is_online:
     max_rad_today = max([w["today_hourly"][h]["rad"] for h in target_hours if h in w["today_hourly"]] + [1])
     max_rad_tmr = max([w["hourly"][h]["rad"] for h in target_hours if h in w["hourly"]] + [1])
     
+    # 計算今日
     for h in target_hours:
         if h in w["today_hourly"]:
             h_data = w["today_hourly"][h]
@@ -369,12 +387,31 @@ if api_is_online:
             h_ahu = 0.0 if h == "08:00" else (23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (smoothed_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load)
             dynamic_load = (h_ahu + max(0, (smoothed_temp - 25.0) * 5.5)) * shading_factor
             
-            h_load = 160.0 if today_is_holiday else today_base_load + today_actual_load_no_ahu + dynamic_load - today_shaved_kw
+            # --- 【關鍵升級】18:00 動態卸載與下班邏輯 ---
+            hour_int = int(h[:2])
+            if hour_int >= 18:
+                if today_is_holiday:
+                    h_load = 160.0
+                else:
+                    if overtime_status == "🌇 18:00 準時下班 (啟動夜間降載)":
+                        h_load = 160.0 # 假定與假日一樣，人員撤離且主機卸載
+                    else:
+                        h_load = today_base_load + (today_actual_load_no_ahu * 0.3) + (dynamic_load * 0.5) - today_shaved_kw
+            else:
+                h_load = 160.0 if today_is_holiday else today_base_load + today_actual_load_no_ahu + dynamic_load - today_shaved_kw
+            
             h_net = h_load - h_solar
             
-            calc_today[h] = {"temp": h_temp, "rad": h_rad, "wx": h_data['wx'], "c_low": c_low, "c_mid": c_mid, "c_high": h_data.get('c_high',0), "cp": cp, "h_solar": h_solar, "h_load": h_load, "h_net": h_net, "shading_factor": shading_factor}
-            if h_net > today_max_net: today_max_net, today_worst_hour = h_net, h
+            current_limit_today = 452.0 if (is_summer_today and 16 <= hour_int < 22) else 516.0
+            gap_today = h_net - current_limit_today
+            
+            calc_today[h] = {"temp": h_temp, "rad": h_rad, "wx": h_data['wx'], "c_low": c_low, "c_mid": c_mid, "c_high": h_data.get('c_high',0), "cp": cp, "h_solar": h_solar, "h_load": h_load, "h_net": h_net, "shading_factor": shading_factor, "current_limit": current_limit_today}
+            
+            if gap_today > today_max_gap: 
+                today_max_gap = gap_today
+                today_max_net, today_worst_hour = h_net, h
 
+    # 計算明日
     for h in target_hours:
         if h in w["hourly"]:
             h_data = w["hourly"][h]
@@ -392,15 +429,37 @@ if api_is_online:
             h_ahu = 0.0 if h == "08:00" else (23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (smoothed_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load)
             dynamic_load = (h_ahu + max(0, (smoothed_temp - 25.0) * 5.5)) * shading_factor
             
-            h_load = (160.0 + event_kw) if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + dynamic_load - tmr_shaved_kw
+            # --- 【關鍵升級】18:00 動態卸載與下班邏輯 ---
+            hour_int = int(h[:2])
+            if hour_int >= 18:
+                if tmr_is_holiday:
+                    h_load = 160.0 + event_kw
+                else:
+                    if overtime_status == "🌇 18:00 準時下班 (啟動夜間降載)":
+                        h_load = 160.0 
+                    else:
+                        h_load = tmr_true_base_load + (tmr_actual_load_growth * 0.3) + (dynamic_load * 0.5) - tmr_shaved_kw
+            else:
+                h_load = (160.0 + event_kw) if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + dynamic_load - tmr_shaved_kw
+            
             h_net = h_load - h_solar
             
-            calc_tmr[h] = {"temp": h_temp, "rad": h_rad, "wx": h_data['wx'], "c_low": c_low, "c_mid": c_mid, "c_high": h_data.get('c_high',0), "cp": cp, "h_solar": h_solar, "h_load": h_load, "h_net": h_net, "shading_factor": shading_factor}
-            if h_net > max_net_grid_demand: max_net_grid_demand, worst_hour, worst_hour_load, worst_hour_solar = h_net, h, h_load, h_solar
+            current_limit_tmr = 452.0 if (is_summer_tmr and 16 <= hour_int < 22) else 516.0
+            gap_tmr = h_net - current_limit_tmr
+            
+            calc_tmr[h] = {"temp": h_temp, "rad": h_rad, "wx": h_data['wx'], "c_low": c_low, "c_mid": c_mid, "c_high": h_data.get('c_high',0), "cp": cp, "h_solar": h_solar, "h_load": h_load, "h_net": h_net, "shading_factor": shading_factor, "current_limit": current_limit_tmr}
+            
+            if gap_tmr > tmr_max_gap: 
+                tmr_max_gap = gap_tmr
+                max_net_grid_demand, worst_hour, worst_hour_load, worst_hour_solar = h_net, h, h_load, h_solar
 
     avg_cp = sum([calc_tmr[h]["cp"] for h in calc_tmr]) / len(calc_tmr) if calc_tmr else 1.0
     est_solar = SOLAR_MAX_KW * min(1.0, w.get("tmr_rad", 400) / 1000.0) * avg_cp if solar_mode == "🤖 API 短波輻射精準推算" else manual_solar
+    
+    worst_limit_tmr = calc_tmr[worst_hour]["current_limit"] if worst_hour in calc_tmr else (452.0 if is_summer_tmr else 516.0)
+
 else:
+    # 斷線盲估模式
     h_solar_blind = manual_solar if solar_mode == "✋ 廠務手動強制設定" else SOLAR_MAX_KW * 0.4
     shading_factor_blind = 0.5 if h_solar_blind < 20.0 else (0.7 if h_solar_blind < 50.0 else 1.0)
     
@@ -412,8 +471,9 @@ else:
     max_net_grid_demand, worst_hour = h_load_blind - h_solar_blind, "斷線盲估"
     worst_hour_load, worst_hour_solar = h_load_blind, h_solar_blind
     est_solar = h_solar_blind
+    worst_limit_tmr = 452.0 if is_summer_tmr else 516.0
 
-demand_gap = max_net_grid_demand - (CONTRACT_LIMIT - 15.0)
+demand_gap = max_net_grid_demand - (worst_limit_tmr - 15.0)
 needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
 extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0 if not tmr_is_holiday else 0.0
 extra_ice_rthr_for_cooling += event_ice_rthr  
@@ -448,14 +508,14 @@ if enable_line_notify and line_token and api_is_online:
     if "line_alert_sent" not in st.session_state:
         st.session_state["line_alert_sent"] = False
         
-    if max_net_grid_demand >= (CONTRACT_LIMIT - 10.0) and not st.session_state["line_alert_sent"]:
+    if max_net_grid_demand >= (worst_limit_tmr - 10.0) and not st.session_state["line_alert_sent"]:
         now_str = datetime.now(TW_TZ).strftime("%Y-%m-%d %H:%M")
         alert_msg = f"""
 🚨 【需量超約預警】 🚨
 時間：{now_str}
 -----------------------
 ⚠️ 明日 {worst_hour} 預估需量將達 {max_net_grid_demand:.1f} kW！
-🛑 距離契約極限 {CONTRACT_LIMIT} kW 僅剩 {(CONTRACT_LIMIT - max_net_grid_demand):.1f} kW 緩衝！
+🛑 距離 {worst_hour} 契約極限 {worst_limit_tmr} kW 僅剩 {(worst_limit_tmr - max_net_grid_demand):.1f} kW 緩衝！
 
 💡 建議處置：
 1. 請確認今晚儲冰排程已設定為最長時數。
@@ -466,9 +526,9 @@ if enable_line_notify and line_token and api_is_online:
             st.toast("✅ 已成功發送 Line 超約警報至廠務群組！", icon="🚨")
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.9.1")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.9.2")
 
-if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.9 加密防禦運算中)</div>", unsafe_allow_html=True)
+if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.9.2 極限防禦運算中)</div>", unsafe_allow_html=True)
 elif w["status_code"] == 2: st.markdown("<div class='status-banner-vc'>📡 系統狀態：🟡 ECMWF 遭遇壅塞，已無縫啟動 VC 企業備援</div>", unsafe_allow_html=True)
 else: st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 雙氣象源皆斷線 (已切換至保守盲估模式)</div>", unsafe_allow_html=True)
 
@@ -502,35 +562,35 @@ with sc2:
 st.markdown("---")
 st.subheader(f"⚡ 今日關鍵時段即時追蹤 ({today_str} 現場比對專用)")
 if api_is_online:
-    h_cols_today = st.columns(5)
+    h_cols_today = st.columns(len(target_hours))
     for i, h in enumerate(target_hours):
         with h_cols_today[i]:
-            header_text = f"⏰ {h}" if not (is_summer_tmr and h == "16:00") else "⚠️ 16:00 (夜尖峰)"
+            header_text = f"⏰ {h}" if not (is_summer_today and 16 <= int(h[:2]) < 22) else f"⚠️ {h} (夜尖峰)"
             st.markdown(f"<div style='text-align:center; font-size:18px; font-weight:bold; color:#17a2b8;'>{header_text}</div>", unsafe_allow_html=True)
             if h in calc_today:
                 d = calc_today[h]
-                card_color = "#dc3545" if d['h_net'] > CONTRACT_LIMIT - 15 else ("#ffc107" if d['h_net'] > CONTRACT_LIMIT - 50 else "#28a745")
+                card_color = "#dc3545" if d['h_net'] > d['current_limit'] - 15 else ("#ffc107" if d['h_net'] > d['current_limit'] - 50 else "#28a745")
                 st.write(f"🌤️ {d['wx']}<br>🌡️ {d['temp']} °C | ☀️ {d['rad']} W/m²", unsafe_allow_html=True)
                 
                 cloud_html = f"<div>☁️ 雲分布 (低/中/高)</div><div style='font-weight:bold;'>{d['c_low']}% / {d['c_mid']}% / {d['c_high']}%</div>" if w["status_code"]==1 else f"<div>☁️ 雲分布 (總雲量)</div><div style='font-weight:bold;'>{d['c_low']}%</div>"
                 if d['cp'] < 1.0 and solar_mode == "🤖 API 短波輻射精準推算": cloud_html += f"<div style='color:#e74c3c; font-size:11px; font-weight:bold; margin-top:3px; background:#ffeaea; border-radius:4px;'>🌩️ 雲層衰減: -{int((1-d['cp'])*100)}%</div>"
                 if d['shading_factor'] < 1.0: cloud_html += f"<div style='color:#0c5460; font-size:11px; font-weight:bold; margin-top:3px; background:#d1ecf1; border-radius:4px;'>🌧️ 遮蔽冷卻卸載: -{int((1-d['shading_factor'])*100)}%</div>"
                 
-                st.markdown(f"""<div class="hourly-card-today" style="border-left-color: {card_color};"><div class="cloud-badge">{cloud_html}</div><div style="font-size:13px; color:#555;">🏭 總負載: {d['h_load']:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{d['h_solar']:.1f}</div><div style="height:1px; background-color:#b8daff; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {d['h_net']:.0f} kW</div></div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="hourly-card-today" style="border-left: 4px solid {card_color};"><div class="cloud-badge">{cloud_html}</div><div style="font-size:13px; color:#555;">🏭 總負載: {d['h_load']:.1f}</div><div style="font-size:13px; color:#28a745;">🌞 太陽能: -{d['h_solar']:.1f}</div><div style="height:1px; background-color:#b8daff; margin:2px 0;"></div><div style="font-size:16px; font-weight:bold; color:{card_color};">⚡ 需量: {d['h_net']:.0f} kW</div></div>""", unsafe_allow_html=True)
             else: st.write("資料擷取中...")
 else: st.warning("📡 API 暫時斷線。")
 
 st.markdown("---")
 st.subheader(f"🎯 明日關鍵時段預報追蹤 ({tmr_str} 儲冰防禦準備)")
 if api_is_online:
-    h_cols = st.columns(5)
+    h_cols = st.columns(len(target_hours))
     for i, h in enumerate(target_hours):
         with h_cols[i]:
-            header_text = f"⏰ {h}" if not (is_summer_tmr and h == "16:00") else "⚠️ 16:00 (夜尖峰)"
+            header_text = f"⏰ {h}" if not (is_summer_tmr and 16 <= int(h[:2]) < 22) else f"⚠️ {h} (夜尖峰)"
             st.markdown(f"<div style='text-align:center; font-size:18px; font-weight:bold; color:#1E3A8A;'>{header_text}</div>", unsafe_allow_html=True)
             if h in calc_tmr:
                 d = calc_tmr[h]
-                card_color = "#dc3545" if d['h_net'] > CONTRACT_LIMIT - 15 else ("#ffc107" if d['h_net'] > CONTRACT_LIMIT - 50 else "#28a745")
+                card_color = "#dc3545" if d['h_net'] > d['current_limit'] - 15 else ("#ffc107" if d['h_net'] > d['current_limit'] - 50 else "#28a745")
                 st.write(f"🌤️ {d['wx']}<br>🌡️ {d['temp']} °C | ☀️ {d['rad']} W/m²", unsafe_allow_html=True)
                 
                 cloud_html = f"<div>☁️ 雲分布 (低/中/高)</div><div style='font-weight:bold;'>{d['c_low']}% / {d['c_mid']}% / {d['c_high']}%</div>" if w["status_code"]==1 else f"<div>☁️ 雲分布 (總雲量)</div><div style='font-weight:bold;'>{d['c_low']}%</div>"
@@ -552,15 +612,15 @@ if tmr_is_holiday:
     c3.metric("🛡️ 磁浮降載防禦", "-0.0 kW", "假日未達主機上限無需降載", delta_color="off")
 else:
     c1.metric("歷史基礎與進駐加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"進駐率 {occupancy_rate}%", delta_color="off")
-    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.9 遮蔽降載參數", delta_color="off")
+    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.9.2 遮蔽與下班卸載", delta_color="off")
     c4.metric("🔥 園區最嚴苛總負載", f"{worst_hour_load + tmr_shaved_kw:.1f} kW", "加上防禦前的物理極限", delta_color="off")
-    c3.metric("🛡️ 磁浮 70% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
+    c3.metric("🛡️ 磁浮 50% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
 
 c5, c6, c7, c8 = st.columns(4)
 c5.metric(f"🔥 {worst_hour} 防禦後負載", f"{worst_hour_load:.1f} kW", "該時段之真實耗能", delta_color="off")
 c6.metric(f"📉 {worst_hour} 太陽能殘值", f"-{worst_hour_solar:.1f} kW", "太陽偏西或雲層遮蔽後之發電量", delta_color="normal")
 c7.metric("⚡ 真實最高台電需量", f"{max_net_grid_demand:.1f} kW", "作為儲備防禦的最高標準", delta_color="inverse")
-c8.metric("🛑 契約警戒線", f"{CONTRACT_LIMIT} kW", f"{season_tag}模式", delta_color="off")
+c8.metric("🛑 該時段警戒線", f"{worst_limit_tmr} kW", f"{season_tag}動態防禦", delta_color="off")
 
 st.markdown("---")
 st.markdown(f"<div style='text-align: center; color: #666;'>系統運行中 | 氣象更新時間：{w['fetch_time']} | 設備參數：CHU-2(磁浮冰機) & BCU-1(儲冰主機) & IB-1(2500RT-HR) & AHU-G11 & AHU-GB1 & AHU-GB2 </div>", unsafe_allow_html=True)
