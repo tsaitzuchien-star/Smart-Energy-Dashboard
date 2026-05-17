@@ -34,7 +34,7 @@ if not check_password():
     st.stop()
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.9.3", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.9.4", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -60,7 +60,6 @@ ICE_CHILLER_CAP_RT = 242.5
 ICE_BANK_MAX_RTHR = 2500.0   
 
 MAG_CHILLER_RT = 200.0       
-# 【升級 3.9.3】：防禦緊縮，磁浮主機最高鎖定在 50% 負載
 MAG_CAP_LIMIT = 0.50         
 MAG_EFF = 0.7                
 SOLAR_MAX_KW = 145.0         
@@ -91,7 +90,7 @@ historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530,
 base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
-    st.info("📡 V3.9.3：50%極限防禦、18:00自動卸載 & 排程時間智慧取整")
+    st.info("📡 V3.9.4：50%極限防禦、18:00自動卸載 & 廠務巡檢UI")
     
     st.header("📅 明日場地租借 (首要確認)")
     st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>同仁請優先確認此項。系統會自動依據平假日與租借時長，精算最省錢的冰水防禦戰略。</div>", unsafe_allow_html=True)
@@ -105,7 +104,6 @@ with st.sidebar:
     st.header("🏢 動態負載微調")
     occupancy_rate = st.slider("今日園區預估進駐率 (%)", min_value=0, max_value=100, value=100, step=5)
     
-    # 【新增 3.9.2】加班狀態預測選單
     overtime_status = st.radio("今日廠商加班預測", [
         "🌇 18:00 準時下班 (啟動夜間降載)", 
         "🌙 19:30 晚間加班 (維持基礎供應)"
@@ -220,7 +218,6 @@ def get_smart_weather():
     today_prefix = datetime.now(TW_TZ).strftime("%Y-%m-%d")
     tmr_prefix = (datetime.now(TW_TZ) + timedelta(days=1)).strftime("%Y-%m-%d")
     lat, lon = "23.936537", "120.697917"
-    # 【新增 3.9.2】加入 18:00 進入觀測範圍，展示斷崖式降載
     target_hours = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]
     
     from requests.adapters import HTTPAdapter
@@ -336,7 +333,7 @@ with st.sidebar:
         st.error("⚠️ 雙氣象源皆斷線")
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 決策大腦運算 (V3.9.3 分時與加班卸載運算引擎) ---
+# --- 4. 決策大腦運算 (V3.9.4 分時與加班卸載運算引擎) ---
 today_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 today_base_load = base_load_historical + today_ice_rest
 today_actual_load_no_ahu = 70.0 * (occupancy_rate / 100.0) 
@@ -387,14 +384,14 @@ if api_is_online:
             h_ahu = 0.0 if h == "08:00" else (23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (smoothed_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load)
             dynamic_load = (h_ahu + max(0, (smoothed_temp - 25.0) * 5.5)) * shading_factor
             
-            # --- 【關鍵升級】18:00 動態卸載與下班邏輯 ---
+            # --- 18:00 動態卸載與下班邏輯 ---
             hour_int = int(h[:2])
             if hour_int >= 18:
                 if today_is_holiday:
                     h_load = 160.0
                 else:
                     if overtime_status == "🌇 18:00 準時下班 (啟動夜間降載)":
-                        h_load = 160.0 # 假定與假日一樣，人員撤離且主機卸載
+                        h_load = 160.0
                     else:
                         h_load = today_base_load + (today_actual_load_no_ahu * 0.3) + (dynamic_load * 0.5) - today_shaved_kw
             else:
@@ -429,7 +426,7 @@ if api_is_online:
             h_ahu = 0.0 if h == "08:00" else (23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (smoothed_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load)
             dynamic_load = (h_ahu + max(0, (smoothed_temp - 25.0) * 5.5)) * shading_factor
             
-            # --- 【關鍵升級】18:00 動態卸載與下班邏輯 ---
+            # --- 18:00 動態卸載與下班邏輯 ---
             hour_int = int(h[:2])
             if hour_int >= 18:
                 if tmr_is_holiday:
@@ -494,7 +491,6 @@ else:
     suggested_ice_hrs = max(1.5, min(9.0, ((needed_ice_rthr_for_grid + extra_ice_rthr_for_cooling) * 1.2) / ICE_CHILLER_CAP_RT))
     end_minutes = 7 * 60 
     
-    # --- 【升級 3.9.3】：時間智慧向下取整 ---
     exact_start = int(end_minutes - (suggested_ice_hrs * 60))
     start_minutes = (exact_start // 10) * 10
     
@@ -507,7 +503,7 @@ else:
     else: 
         melt_start, melt_end, melt_memo = "10:00", "16:00", "*依 IB-1 設計 13°C 進水條件執行。"
 
-# --- [V3.9.3] Line Notify 超約預警觸發邏輯 ---
+# --- [V3.9.4] Line Notify 超約預警觸發邏輯 ---
 if enable_line_notify and line_token and api_is_online:
     if "line_alert_sent" not in st.session_state:
         st.session_state["line_alert_sent"] = False
@@ -530,9 +526,9 @@ if enable_line_notify and line_token and api_is_online:
             st.toast("✅ 已成功發送 Line 超約警報至廠務群組！", icon="🚨")
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.9.3")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.9.4")
 
-if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.9.3 極限防禦運算中)</div>", unsafe_allow_html=True)
+if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.9.4 極限防禦運算中)</div>", unsafe_allow_html=True)
 elif w["status_code"] == 2: st.markdown("<div class='status-banner-vc'>📡 系統狀態：🟡 ECMWF 遭遇壅塞，已無縫啟動 VC 企業備援</div>", unsafe_allow_html=True)
 else: st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 雙氣象源皆斷線 (已切換至保守盲估模式)</div>", unsafe_allow_html=True)
 
@@ -556,12 +552,33 @@ st.markdown(f'<div class="action-call" style="background-color: {"#17a2b8" if is
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
-sc1, sc2 = st.columns(2)
+
+# --- 【V3.9.4 升級】新增為三個並排卡片區塊 ---
+sc1, sc2, sc3 = st.columns(3)
+
 with sc1:
     memo_1 = "*明日為純假日，無需儲備。" if is_pure_holiday else ("*假日離峰，暫停儲冰。" if is_holiday_event else "*最晚於 07:00 結束，避開早晨需量尖峰。")
     st.markdown(f"""<div class="schedule-box"><b>❄️ 夜間儲冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{start_time_str}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{end_time_str}</span><br><br><span style="font-size:16px; color:#666;">{memo_1}</span></div>""", unsafe_allow_html=True)
+
 with sc2:
     st.markdown(f"""<div class="schedule-box"><b>💧 日間融冰排程</b><br><br>啟動：<span class="schedule-time" style="color:{time_color};">{melt_start}</span><br>停止：<span class="schedule-time" style="color:{time_color};">{melt_end}</span><br><br><span style="font-size:16px; color:#666;">{melt_memo}</span></div>""", unsafe_allow_html=True)
+
+with sc3:
+    if is_pure_holiday or is_holiday_event:
+        chiller_morn = "維持現狀"
+        chiller_aft = "維持現狀"
+        chiller_color_m = "#666"
+        chiller_color_a = "#666"
+        chiller_memo = "*明日為假日，依現場需求調度或維持關機。"
+    else:
+        chiller_morn = "上限 70%"
+        chiller_aft = "降載 50%"
+        chiller_color_m = "#28a745" # 綠色，安全區間
+        chiller_color_a = "#dc3545" # 紅色，緊急防禦
+        chiller_memo = "*BMS連動前，請併入廠務每日例行巡檢執行。"
+        
+    st.markdown(f"""<div class="schedule-box"><b>🎛️ 磁浮主機 (人工設定)</b><br><br>08:00：<span class="schedule-time" style="font-size: 28px; color:{chiller_color_m};">{chiller_morn}</span><br>15:50：<span class="schedule-time" style="font-size: 28px; color:{chiller_color_a};">{chiller_aft}</span><br><br><span style="font-size:16px; color:#666;">{chiller_memo}</span></div>""", unsafe_allow_html=True)
+
 
 st.markdown("---")
 st.subheader(f"⚡ 今日關鍵時段即時追蹤 ({today_str} 現場比對專用)")
@@ -616,7 +633,7 @@ if tmr_is_holiday:
     c3.metric("🛡️ 磁浮降載防禦", "-0.0 kW", "假日未達主機上限無需降載", delta_color="off")
 else:
     c1.metric("歷史基礎與進駐加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"進駐率 {occupancy_rate}%", delta_color="off")
-    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.9.3 遮蔽與下班卸載", delta_color="off")
+    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.9.4 遮蔽與下班卸載", delta_color="off")
     c4.metric("🔥 園區最嚴苛總負載", f"{worst_hour_load + tmr_shaved_kw:.1f} kW", "加上防禦前的物理極限", delta_color="off")
     c3.metric("🛡️ 磁浮 50% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
 
