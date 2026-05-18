@@ -109,7 +109,7 @@ with st.sidebar:
         "🌙 19:30 晚間加班 (維持基礎供應)"
     ])
     
-    chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=50.0, step=5.0)
+    chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=90.0, step=5.0)
     
     st.markdown("---")
     st.header("🌞 太陽能預測校正")
