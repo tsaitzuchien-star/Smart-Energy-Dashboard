@@ -86,7 +86,7 @@ elif tmr_dt.month == 10 and tmr_dt.day <= 15:
 
 CONTRACT_LIMIT, season_tag = (452.0, "夏月(新制)") if is_summer_tmr else (516.0, "非夏月")
 
-historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 365, 7: 530, 8: 504, 9: 428, 10: 460, 11: 500, 12: 394}
+historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 530, 7: 530, 8: 504, 9: 468, 10: 460, 11: 500, 12: 394}
 base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
