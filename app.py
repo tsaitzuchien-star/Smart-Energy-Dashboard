@@ -34,7 +34,7 @@ if not check_password():
     st.stop()
 
 # --- 1. 網頁基本設定 ---
-st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.9.4", page_icon="❄️", layout="wide")
+st.set_page_config(page_title="中創園區契約容量暨空調聯防 V3.9.5", page_icon="❄️", layout="wide")
 
 st.markdown("""
     <style>
@@ -90,7 +90,7 @@ historical_max_demand = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 502, 7: 510,
 base_load_historical = historical_max_demand.get(current_month, 400)
 
 with st.sidebar:
-    st.info("📡 V3.9.4：50%極限防禦、18:00自動卸載 & 廠務巡檢UI")
+    st.info("📡 V3.9.5：兵推防禦回歸 + 18:00動態卸載引擎")
     
     st.header("📅 明日場地租借 (首要確認)")
     st.markdown("<div style='font-size:13px; color:#666; margin-bottom:10px;'>同仁請優先確認此項。系統會自動依據平假日與租借時長，精算最省錢的冰水防禦戰略。</div>", unsafe_allow_html=True)
@@ -128,6 +128,23 @@ with st.sidebar:
         st.success("已啟用空間熱力學與排程連動演算")
         hidden_ahu_load = 23.0 
     
+    # ==========================================
+    # 🚨 危機處理：緊急降載沙盤推演 (從 V3.2.2 完美加回)
+    # ==========================================
+    st.markdown("---")
+    st.header("🚨 危機處理：緊急降載沙盤推演")
+    st.markdown("<div style='font-size:13px; color:#dc3545; font-weight:bold; margin-bottom:10px;'>當預估需量暴增時，向主管展示降載成效。</div>", unsafe_allow_html=True)
+    emergency_mode = st.toggle("🔴 啟動緊急防禦模式 (兵推)", value=False)
+    
+    if emergency_mode:
+        emergency_mag_limit_pct = st.slider("強制封印磁浮主機上限 (%)", min_value=30, max_value=70, value=int(MAG_CAP_LIMIT*100), step=5, help="藉由犧牲部分冷度，換取巨大的需量空間")
+        emergency_ahu_drop = st.slider("強迫 AHU 提溫降載 (kW)", min_value=0.0, max_value=37.0, value=20.0, step=1.0, help="模擬現場將 G11, GB1, GB2 溫度調高2度所省下的耗電")
+    else:
+        emergency_mag_limit_pct = int(MAG_CAP_LIMIT * 100) 
+        emergency_ahu_drop = 0.0
+    
+    active_mag_limit = emergency_mag_limit_pct / 100.0
+
     st.markdown("---")
     st.header("🚨 Line 預警推播系統")
     enable_line_notify = st.toggle("啟動超約防禦警報", value=False)
@@ -333,16 +350,19 @@ with st.sidebar:
         st.error("⚠️ 雙氣象源皆斷線")
     st.markdown(f"<div style='color: #666; font-size: 14px; margin-top: 10px;'>⏱️ 氣象大腦同步：<br><b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
 
-# --- 4. 決策大腦運算 (V3.9.4 分時與加班卸載運算引擎) ---
+# --- 4. 決策大腦運算 (V3.9.5 分時與加班卸載運算引擎 + 兵推防禦) ---
 today_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 today_base_load = base_load_historical + today_ice_rest
 today_actual_load_no_ahu = 70.0 * (occupancy_rate / 100.0) 
-today_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
+
+# [V3.9.5] 套用兵推磁浮上限
+today_shaved_kw = MAG_CHILLER_RT * (1.0 - active_mag_limit) * MAG_EFF
 
 tmr_ice_rest = chiller_compensation if 1 <= current_month <= 5 else 0.0
 tmr_true_base_load = base_load_historical + tmr_ice_rest
 tmr_actual_load_growth = 70.0 * (occupancy_rate / 100.0)
-tmr_shaved_kw = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * MAG_EFF
+# [V3.9.5] 套用兵推磁浮上限
+tmr_shaved_kw = MAG_CHILLER_RT * (1.0 - active_mag_limit) * MAG_EFF
 
 event_ice_rthr = 0.0
 if "半天" in conf_hall_status: event_ice_rthr += 75.0
@@ -382,6 +402,11 @@ if api_is_online:
             elif h_solar < 50.0: shading_factor = 0.7
             
             h_ahu = 0.0 if h == "08:00" else (23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (smoothed_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load)
+            
+            # [V3.9.5] 兵推 AHU 降載扣除
+            if emergency_mode:
+                h_ahu = max(0.0, h_ahu - emergency_ahu_drop)
+
             dynamic_load = (h_ahu + max(0, (smoothed_temp - 25.0) * 5.5)) * shading_factor
             
             # --- 18:00 動態卸載與下班邏輯 ---
@@ -424,6 +449,11 @@ if api_is_online:
             elif h_solar < 50.0: shading_factor = 0.7
             
             h_ahu = 0.0 if h == "08:00" else (23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (smoothed_temp - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load)
+            
+            # [V3.9.5] 兵推 AHU 降載扣除
+            if emergency_mode:
+                h_ahu = max(0.0, h_ahu - emergency_ahu_drop)
+
             dynamic_load = (h_ahu + max(0, (smoothed_temp - 25.0) * 5.5)) * shading_factor
             
             # --- 18:00 動態卸載與下班邏輯 ---
@@ -462,6 +492,10 @@ else:
     
     tmr_ahu_blind = 23.0 + (occupancy_rate / 100.0) * min(14.0, max(0, (28.0 - 25.0) * 1.5)) if ahu_mode == "🤖 溫控動態演算 (Auto)" else hidden_ahu_load
     
+    # [V3.9.5] 兵推 AHU 降載扣除
+    if emergency_mode:
+        tmr_ahu_blind = max(0.0, tmr_ahu_blind - emergency_ahu_drop)
+
     h_load_blind = (160.0 + event_kw) if tmr_is_holiday else tmr_true_base_load + tmr_actual_load_growth + (tmr_ahu_blind + max(0, (28.0 - 25.0) * 5.5)) * shading_factor_blind - tmr_shaved_kw
     
     today_max_net, today_worst_hour = h_load_blind - h_solar_blind, "斷線盲估"
@@ -472,7 +506,9 @@ else:
 
 demand_gap = max_net_grid_demand - (worst_limit_tmr - 15.0)
 needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
-extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - MAG_CAP_LIMIT) * 4.0 if not tmr_is_holiday else 0.0
+
+# [V3.9.5] 套用兵推磁浮上限
+extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - active_mag_limit) * 4.0 if not tmr_is_holiday else 0.0
 extra_ice_rthr_for_cooling += event_ice_rthr  
 
 is_pure_holiday = tmr_is_holiday and event_ice_rthr == 0.0
@@ -526,9 +562,14 @@ if enable_line_notify and line_token and api_is_online:
             st.toast("✅ 已成功發送 Line 超約警報至廠務群組！", icon="🚨")
 
 # --- 5. 渲染 UI ---
-st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.9.4")
+st.title("❄️ 中創園區契約容量暨空調聯防：H300行動戰情室 V3.9.5")
 
-if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.9.4 極限防禦運算中)</div>", unsafe_allow_html=True)
+# [V3.9.5 加回] 兵推模式警告標語
+if emergency_mode:
+    saved_kw_total = (MAG_CHILLER_RT * (MAG_CAP_LIMIT - active_mag_limit) * MAG_EFF) + emergency_ahu_drop
+    st.markdown(f"<div style='background-color:#fff3cd; color:#856404; padding:12px; border-radius:8px; border-left: 6px solid #ffc107; font-size:18px; margin-bottom:15px; font-weight:bold;'>🚨 兵推模式運作中：已強制介入系統參數，預估可為園區緊急省下 {saved_kw_total:.1f} kW 的救命需量空間！</div>", unsafe_allow_html=True)
+
+if w["status_code"] == 1: st.markdown("<div class='status-banner-ecmwf'>📡 系統狀態：🟢 雙源比對引擎啟動 (V3.9.5 極限防禦運算中)</div>", unsafe_allow_html=True)
 elif w["status_code"] == 2: st.markdown("<div class='status-banner-vc'>📡 系統狀態：🟡 ECMWF 遭遇壅塞，已無縫啟動 VC 企業備援</div>", unsafe_allow_html=True)
 else: st.markdown("<div class='status-banner-fail'>📡 系統狀態：🔴 雙氣象源皆斷線 (已切換至保守盲估模式)</div>", unsafe_allow_html=True)
 
@@ -553,7 +594,6 @@ st.markdown(f'<div class="action-call" style="background-color: {"#17a2b8" if is
 st.markdown("<br>", unsafe_allow_html=True)
 st.subheader("📝 中央監控系統 (儲融冰) 排程設定建議")
 
-# --- 【V3.9.4 升級】新增為三個並排卡片區塊 ---
 sc1, sc2, sc3 = st.columns(3)
 
 with sc1:
@@ -573,8 +613,8 @@ with sc3:
     else:
         chiller_morn = "上限 70%"
         chiller_aft = "降載 50%"
-        chiller_color_m = "#28a745" # 綠色，安全區間
-        chiller_color_a = "#dc3545" # 紅色，緊急防禦
+        chiller_color_m = "#28a745" 
+        chiller_color_a = "#dc3545" 
         chiller_memo = "*BMS連動前，請併入廠務每日例行巡檢執行。"
         
     st.markdown(f"""<div class="schedule-box"><b>🎛️ 磁浮主機 (人工設定)</b><br><br>08:00：<span class="schedule-time" style="font-size: 28px; color:{chiller_color_m};">{chiller_morn}</span><br>15:50：<span class="schedule-time" style="font-size: 28px; color:{chiller_color_a};">{chiller_aft}</span><br><br><span style="font-size:16px; color:#666;">{chiller_memo}</span></div>""", unsafe_allow_html=True)
@@ -633,9 +673,12 @@ if tmr_is_holiday:
     c3.metric("🛡️ 磁浮降載防禦", "-0.0 kW", "假日未達主機上限無需降載", delta_color="off")
 else:
     c1.metric("歷史基礎與進駐加載", f"{tmr_true_base_load + tmr_actual_load_growth:.1f} kW", f"進駐率 {occupancy_rate}%", delta_color="off")
-    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.9.4 遮蔽與下班卸載", delta_color="off")
+    c2.metric("🌡️ 空調熱力與慣性加載", f"+{(worst_hour_load + tmr_shaved_kw - tmr_true_base_load - tmr_actual_load_growth):.1f} kW", f"包含 V3.9.5 遮蔽與下班卸載", delta_color="off")
     c4.metric("🔥 園區最嚴苛總負載", f"{worst_hour_load + tmr_shaved_kw:.1f} kW", "加上防禦前的物理極限", delta_color="off")
-    c3.metric("🛡️ 磁浮 50% 封印降載", f"-{tmr_shaved_kw:.1f} kW", "硬體限制省下需量", delta_color="normal")
+    
+    # [V3.9.5 更新] 兵推模式標籤動態切換
+    mag_txt = f"兵推強制降載 ({emergency_mag_limit_pct}%)" if emergency_mode else f"硬體限制省下需量 ({int(MAG_CAP_LIMIT*100)}%)"
+    c3.metric(f"🛡️ 磁浮 {emergency_mag_limit_pct if emergency_mode else int(MAG_CAP_LIMIT*100)}% 封印降載", f"-{tmr_shaved_kw:.1f} kW", mag_txt, delta_color="normal")
 
 c5, c6, c7, c8 = st.columns(4)
 c5.metric(f"🔥 {worst_hour} 防禦後負載", f"{worst_hour_load:.1f} kW", "該時段之真實耗能", delta_color="off")
