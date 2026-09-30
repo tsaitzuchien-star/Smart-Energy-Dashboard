@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 📥 下載程式碼
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       
       - name: 🐍 設定 Python 環境
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           
@@ -26,4 +26,6 @@ jobs:
         env:
           # 這裡會去抓我們等一下要在 GitHub 後台設定的隱藏金鑰
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          # 選填：有設 VC_API_KEY 才會啟用 Visual Crossing 備援／高溫校正
+          VC_API_KEY: ${{ secrets.VC_API_KEY }}
         run: python auto_log.py
