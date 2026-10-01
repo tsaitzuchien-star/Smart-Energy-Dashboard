@@ -361,6 +361,8 @@ with tab_tonight:
 
     # --- 逐時圖 + 組成 ---
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    view = st.radio("顯示日期", ["明日預測", "今日追蹤"], horizontal=True, label_visibility="collapsed")
+    is_tmr_view = view == "明日預測"
     chart_col, part_col = st.columns([2.3, 1])
 
     def bars_html(calc, is_summer):
@@ -387,8 +389,6 @@ with tab_tonight:
         return f'<div class="chart">{"".join(cols)}</div><div class="xlab">{"".join(labs)}</div>'
 
     with chart_col:
-        view = st.radio("顯示日期", ["明日預測", "今日追蹤"], horizontal=True, label_visibility="collapsed")
-        is_tmr_view = view == "明日預測"
         calc_view = calc_tmr if is_tmr_view else calc_today
         date_view = f"{tmr_dt.month} 月 {tmr_dt.day} 日（{tmr_week[-1]}）" if is_tmr_view else f"{now_dt.month} 月 {now_dt.day} 日（{week_list[now_dt.weekday()][-1]}）"
         if api_is_online and calc_view:
