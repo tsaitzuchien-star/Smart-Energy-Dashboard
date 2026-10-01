@@ -306,7 +306,7 @@ if emergency_mode:
     saved_kw_total = (MAG_CHILLER_RT * (MAG_CAP_LIMIT - inp.active_mag_limit) * MAG_EFF) + emergency_ahu_drop
     st.markdown(f"<div class='warnbar'>🚨 兵推模式運作中：已強制介入系統參數，預估可為園區緊急省下 {saved_kw_total:.1f} kW 的需量空間。</div>", unsafe_allow_html=True)
 
-tab_tonight, tab_detail, tab_help = st.tabs(["今晚任務", "氣象與細節", "參數說明"])
+tab_tonight, tab_detail, tab_help = st.tabs(["今晚任務", "逐時明細", "參數說明"])
 
 # ====================== 今晚任務 ======================
 with tab_tonight:
@@ -452,8 +452,9 @@ with tab_tonight:
         </div>
         """), unsafe_allow_html=True)
 
-# ====================== 氣象與細節 ======================
-with tab_detail:
+# ====================== 氣象、兵推、準確度（首頁下半部）======================
+with tab_tonight:
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
     def tile(k, v, u=""):
         return f'<div class="tile"><div class="k">{k}</div><div class="v">{v}<span class="u">{u}</span></div></div>'
 
@@ -485,17 +486,22 @@ with tab_detail:
         </div>
         """), unsafe_allow_html=True)
     with ecol:
-        if emergency_mode and api_is_online:
-            base_fc = compute_forecast(w, replace(inp, emergency_mode=False, emergency_mag_limit_pct=int(MAG_CAP_LIMIT * 100), emergency_ahu_drop=0.0),
-                                       now_dt, today_is_holiday, tmr_is_holiday)
-            b, e = base_fc["max_net_grid_demand"], max_net_grid_demand
+        if api_is_online:
+            if emergency_mode:
+                base_inp, sim_inp, sim_tag = replace(inp, emergency_mode=False, emergency_mag_limit_pct=int(MAG_CAP_LIMIT * 100), emergency_ahu_drop=0.0), inp, "兵推"
+            else:
+                sim_inp = replace(inp, emergency_mode=True, emergency_mag_limit_pct=40, emergency_ahu_drop=20.0)
+                base_inp, sim_tag = inp, "兵推試算"
+            b = compute_forecast(w, base_inp, now_dt, today_is_holiday, tmr_is_holiday)["max_net_grid_demand"]
+            e = compute_forecast(w, sim_inp, now_dt, today_is_holiday, tmr_is_holiday)["max_net_grid_demand"]
             scale = max(b, e, 1.0)
+            hint = "" if emergency_mode else "　（預設試算；左側「進階參數」可自訂並正式啟動）"
             st.markdown(html(f"""
             <div class="card">
               <h3>兵推沙盤</h3>
-              <div class="note" style="margin-bottom:12px;">磁浮上限 {int(MAG_CAP_LIMIT * 100)}% 改 {inp.emergency_mag_limit_pct}%，AHU 降載 {emergency_ahu_drop:.0f} kW</div>
+              <div class="note" style="margin-bottom:12px;">磁浮上限 {int(MAG_CAP_LIMIT * 100)}% 改 {sim_inp.emergency_mag_limit_pct}%，AHU 降載 {sim_inp.emergency_ahu_drop:.0f} kW{hint}</div>
               <div class="cmp"><span class="lab">基準</span><div class="tr"><div style="width:{b / scale * 100:.0f}%;background:#F2B632;"></div></div><b>{b:.0f}</b></div>
-              <div class="cmp"><span class="lab">兵推</span><div class="tr"><div style="width:{e / scale * 100:.0f}%;background:#1A7F5A;"></div></div><b>{e:.0f}</b></div>
+              <div class="cmp"><span class="lab" style="width:60px;">{sim_tag}</span><div class="tr"><div style="width:{e / scale * 100:.0f}%;background:#1A7F5A;"></div></div><b>{e:.0f}</b></div>
               <div style="display:flex;justify-content:space-between;align-items:baseline;">
                 <span class="note">代價：部分區域冷度下降</span>
                 <span class="num" style="font-size:22px;font-weight:800;color:#0F5C41;">省下 {b - e:.0f} kW</span></div>
@@ -504,9 +510,46 @@ with tab_detail:
         else:
             st.markdown(html("""
             <div class="card"><h3>兵推沙盤</h3>
-            <div class="note" style="margin-top:6px;line-height:1.7;">目前未啟動。需要向主管展示降載成效時，到左側「進階參數」開啟「緊急防禦模式」。</div></div>
+            <div class="note" style="margin-top:6px;">氣象斷線，無法試算。</div></div>
             """), unsafe_allow_html=True)
 
+    # --- 預測準確度（紀錄累積進度）---
+    @st.cache_data(ttl=3600)
+    def count_log_days():
+        """讀 auto_log 寫入的 Google Sheet，回傳 v2 資料列數；未設定憑證或失敗回傳 None。"""
+        try:
+            import json
+            import gspread
+            from google.oauth2.service_account import Credentials
+            raw = st.secrets["GOOGLE_CREDENTIALS"]
+            info = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+            sheet = gspread.authorize(Credentials.from_service_account_info(info, scopes=scopes)).open("中創園區空調戰情大數據").sheet1
+            return sum(1 for v in sheet.col_values(15)[1:] if str(v).startswith("v2"))
+        except Exception:
+            return None
+
+    log_days = count_log_days()
+    TARGET_DAYS = 14
+    if log_days is None:
+        acc_l, acc_r, acc_w = "尚未連接紀錄表", "— / 14 天", 0
+        acc_note = "每天 18:00 自動記錄預測值。在 Streamlit Secrets 加入 GOOGLE_CREDENTIALS 後，這裡會顯示累積天數；滿 14 天後可並排比對「預測」與「台電實際需量」。"
+    else:
+        acc_l, acc_r, acc_w = ("紀錄累積中" if log_days < TARGET_DAYS else "累積完成"), f"{min(log_days, TARGET_DAYS)} / {TARGET_DAYS} 天", min(log_days, TARGET_DAYS) / TARGET_DAYS * 100
+        acc_note = "每天 18:00 自動記錄預測值。累積滿 14 天後，這裡會並排顯示「預測」與「台電實際需量」。"
+    st.markdown(html(f"""
+    <div class="card" style="margin-top:16px;display:flex;align-items:center;gap:28px;flex-wrap:wrap;">
+      <div style="font-size:16px;font-weight:700;width:92px;flex-shrink:0;">預測準確度</div>
+      <div style="flex:1 1 260px;">
+        <div style="display:flex;justify-content:space-between;font-size:13px;color:#5B6875;"><span>{acc_l}</span><b class="num" style="color:#14202B;">{acc_r}</b></div>
+        <div class="track"><div style="width:{acc_w:.0f}%;background:#1E4F8C;"></div></div>
+      </div>
+      <div class="note" style="flex:1 1 280px;line-height:1.6;">{acc_note}</div>
+    </div>
+    <div class="note" style="margin-top:14px;">設備參數：CHU-2（磁浮冰機）· BCU-1（儲冰主機）· IB-1（2500 RT-HR）· AHU-G11 / GB1 / GB2</div>
+    """), unsafe_allow_html=True)
+
+with tab_detail:
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
     def detail_df(calc):
