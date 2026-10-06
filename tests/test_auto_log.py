@@ -54,7 +54,7 @@ class AutoLogTests(unittest.TestCase):
         self.assertEqual(d["08:00"]["契約上限(kW)"], 616.0)
         self.assertEqual(d["10:00"]["台電時段"], "半尖峰")
         self.assertEqual(d["16:00"]["契約上限(kW)"], 452.0)
-        self.assertEqual(d["16:00"]["實測需量(kW)"], "")
+        self.assertIn(auto_log.ACTUAL_TAB, d["16:00"]["實測需量(kW)"])
         self.assertTrue(d["16:00"]["誤差(實測−預測 kW)"].startswith("="))
 
     def test_compare_rows_offline_empty(self):
@@ -93,6 +93,7 @@ class AutoLogTests(unittest.TestCase):
         ws = book.tabs[auto_log.COMPARE_TAB]
         self.assertEqual(ws.data[0], auto_log.COMPARE_HEADERS)
         self.assertEqual(len(ws.data), 1 + len(rows))
+        self.assertEqual(book.tabs[auto_log.ACTUAL_TAB].data, [auto_log.ACTUAL_HEADERS])
 
     def test_offline_returns_none(self):
         now = datetime(2026, 9, 30, 18, 0, tzinfo=TZ)
