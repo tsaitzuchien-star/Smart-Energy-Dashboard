@@ -1,0 +1,30 @@
+name: 抓取歷史氣象（模型校正用）
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/weather-history]
+    paths: [tools/fetch_weather_history.py, .github/workflows/weather-history.yml]
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install requests
+      - run: python tools/fetch_weather_history.py 2026-06-01 2026-10-05 /tmp/wx
+      - name: 結果推到 claude/weather-history-results 分支
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan wx-results
+          git rm -rfq .
+          cp /tmp/wx/*.json .
+          git add *.json
+          git commit -qm "歷史氣象 2026-06-01 → 2026-10-05"
+          git push -f origin HEAD:claude/weather-history-results
