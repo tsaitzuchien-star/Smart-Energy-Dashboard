@@ -4,9 +4,6 @@ on:
   schedule:
     - cron: '0 2 * * 1'   # 每週一 10:00（台灣時間）
   workflow_dispatch:
-  push:   # 暫時：在 PR 分支上試跑，合併前移除
-    branches: [claude/calibrated-model]
-    paths: [calibrate.py, .github/workflows/calibrate.yml]
 
 jobs:
   calibrate:
@@ -22,8 +19,12 @@ jobs:
       - name: 用最新實測重新擬合
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: python calibrate.py 2>&1 | tee /tmp/cal.log; for l in "$(tail -3 /tmp/cal.log)"; do echo "::notice::$l"; done
-      - name: 模型有變才提交（儀表板會自動重新部署）
+        shell: bash   # 含 pipefail：校正失敗時這一步會變紅
+        run: |
+          python calibrate.py 2>&1 | tee /tmp/cal.log
+          tail -3 /tmp/cal.log | while read -r l; do echo "::notice::$l"; done
+      # 模型檔含產生時間，所以每週都會有一次提交：順便讓 repo 保持活躍，避免 GitHub 停用每日 18:00 排程
+      - name: 提交新模型（儀表板會自動重新部署）
         run: |
           if git diff --quiet model/demand_model.json; then echo "::notice::模型沒有變化"; exit 0; fi
           git config user.name "github-actions[bot]"
