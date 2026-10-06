@@ -5,7 +5,7 @@ import altair as alt
 import pandas as pd
 
 from calendar_tw import load_calendar
-from forecast import ForecastInputs, compute_forecast, OVERTIME_ONTIME
+from forecast import ForecastInputs, compute_forecast, off_days_before, OVERTIME_ONTIME
 import trend
 from weather import fetch_smart_weather, TARGET_HOURS, TW_TZ
 
@@ -231,7 +231,8 @@ inp = ForecastInputs(
     conf_hall_status=conf_hall_status, expo_hall_status=expo_hall_status,
     occupancy_rate=occupancy_rate, overtime_status=overtime_status,
 )
-fc = compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday)
+fc = compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday,
+                      prev_off_days=off_days_before(tmr_dt.date(), cal.is_holiday))
 
 is_summer_today, is_summer_tmr = fc["is_summer_today"], fc["is_summer_tmr"]
 season_tag = fc["season_tag"]
@@ -352,7 +353,10 @@ with tab_tonight:
                 ]
             else:
                 items = [
-                    ("夜間儲冰", f"{start_time_str} → {end_time_str}", "最晚 07:00 結束，避開早晨需量尖峰"),
+                    ("夜間儲冰", f"{start_time_str} → {end_time_str}",
+                     (f"收假前一晚：休了 {fc['prev_off_days']} 天，儲冰槽回溫，已多排約 "
+                      f"{fc['rewarm_hrs']:.1f} 小時；" if fc["rewarm_rthr"] else "")
+                     + "最晚 07:00 結束，避開早晨需量尖峰"),
                     ("日間融冰", f"{melt_start} → {melt_end}", melt_memo.lstrip("*")),
                     ("磁浮主機（人工設定）",
                      "08:00 上限 70%　15:50 全關（融冰供冷）" if fc["tmr_has_peak"] else "08:00 上限 70%　15:50 降載 50%",

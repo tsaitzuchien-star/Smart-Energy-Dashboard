@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 import requests
 
 from calendar_tw import load_calendar
-from forecast import ForecastInputs, compute_forecast
+from forecast import ForecastInputs, compute_forecast, off_days_before
 from weather import LAT, LON, TW_TZ, apply_open_meteo
 
 log = logging.getLogger("backcast")
@@ -59,7 +59,8 @@ def backcast_rows(start, end, hourly, model, cal, inp=None):
     rows, d = [], start
     while d <= end:
         now = datetime(d.year, d.month, d.day, 18, 0, tzinfo=TW_TZ) - timedelta(days=1)
-        fc = compute_forecast(weather_at(hourly, now), inp, now, cal.is_holiday(now.date()), cal.is_holiday(d))
+        fc = compute_forecast(weather_at(hourly, now), inp, now, cal.is_holiday(now.date()), cal.is_holiday(d),
+                              prev_off_days=off_days_before(d, cal.is_holiday))
         for h, c in sorted(fc["calc_tmr"].items()):
             rows.append([d.isoformat(), h, c["period"], c["current_limit"], round(c["h_net"], 1),
                          round(fc["max_net_grid_demand"], 1), fc["worst_hour"], model])

@@ -12,7 +12,7 @@ import sys
 from datetime import datetime, timedelta
 
 from calendar_tw import load_calendar
-from forecast import ForecastInputs, compute_forecast
+from forecast import ForecastInputs, compute_forecast, off_days_before
 from weather import TW_TZ, fetch_smart_weather
 
 log = logging.getLogger("auto_log")
@@ -57,7 +57,8 @@ def build_row(now, w, cal, inp=None):
     inp = inp or ForecastInputs()
     tmr = now + timedelta(days=1)
     tmr_hol = cal.is_holiday(tmr.date())
-    fc = compute_forecast(w, inp, now, cal.is_holiday(now.date()), tmr_hol)
+    fc = compute_forecast(w, inp, now, cal.is_holiday(now.date()), tmr_hol,
+                          prev_off_days=off_days_before(tmr.date(), cal.is_holiday))
 
     temps_today = list(w["all_temps_today"].values())
     today_max_temp = max(temps_today) if temps_today else w["temp"]
@@ -80,7 +81,8 @@ def build_compare_rows(now, w, cal, inp=None):
         return []
     inp = inp or ForecastInputs()
     tmr = now + timedelta(days=1)
-    fc = compute_forecast(w, inp, now, cal.is_holiday(now.date()), cal.is_holiday(tmr.date()))
+    fc = compute_forecast(w, inp, now, cal.is_holiday(now.date()), cal.is_holiday(tmr.date()),
+                          prev_off_days=off_days_before(tmr.date(), cal.is_holiday))
     day = tmr.strftime("%Y-%m-%d")
     return [
         [day, h, WEEKDAYS[tmr.weekday()], d["period"], d["current_limit"], round(d["h_net"], 1), ACTUAL_LOOKUP,
