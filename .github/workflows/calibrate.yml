@@ -22,10 +22,10 @@ jobs:
       - name: 用最新實測重新擬合
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-        run: python calibrate.py
+        run: python calibrate.py 2>&1 | tee /tmp/cal.log; for l in "$(tail -3 /tmp/cal.log)"; do echo "::notice::$l"; done
       - name: 模型有變才提交（儀表板會自動重新部署）
         run: |
-          if git diff --quiet model/demand_model.json; then echo "模型沒有變化"; exit 0; fi
+          if git diff --quiet model/demand_model.json; then echo "::notice::模型沒有變化"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add model/demand_model.json
