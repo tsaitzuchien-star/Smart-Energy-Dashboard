@@ -1,0 +1,38 @@
+name: 回測：用歷史氣象重算過去預測
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: 起始預測日（YYYY-MM-DD）
+        default: '2026-06-08'
+      end:
+        description: 結束預測日（YYYY-MM-DD）
+        default: '2026-09-30'
+  push:
+    branches: [claude/backcast]
+    paths: [backcast.py, .github/workflows/backcast.yml]
+
+jobs:
+  backcast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install requests urllib3
+      - name: 重算預測
+        env:
+          START: ${{ inputs.start || '2026-06-08' }}
+          END: ${{ inputs.end || '2026-09-30' }}
+        run: python backcast.py "$START" "$END" backcast.csv
+      - name: 印出結果
+        run: |
+          echo "=====BACKCAST-CSV-BEGIN====="
+          cat backcast.csv
+          echo "=====BACKCAST-CSV-END====="
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backcast
+          path: backcast.csv
