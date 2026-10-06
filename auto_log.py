@@ -38,7 +38,8 @@ ACTUAL_TAB = "實測需量"
 ACTUAL_HEADERS = ["日期", "時間", "需量(kW)"]
 _A, _B = 'INDIRECT("A"&ROW())', 'INDIRECT("B"&ROW())'
 _MATCH = f"'{ACTUAL_TAB}'!A:A,{_A},'{ACTUAL_TAB}'!B:B,{_B}"
-ACTUAL_LOOKUP = f'=IF(COUNTIFS({_MATCH})=0,"",MAXIFS(\'{ACTUAL_TAB}\'!C:C,{_MATCH}))'
+# 停機/保養時段在實測表留空白列；只算有數值的列，否則 MAXIFS 會回 0
+ACTUAL_LOOKUP = f'=IF(COUNTIFS({_MATCH},\'{ACTUAL_TAB}\'!C:C,"<>")=0,"",MAXIFS(\'{ACTUAL_TAB}\'!C:C,{_MATCH}))'
 _G, _F = 'INDIRECT("G"&ROW())', 'INDIRECT("F"&ROW())'
 ERR_KW = f'=IF({_G}="","",{_G}-{_F})'
 ERR_PCT = f'=IF(OR({_G}="",{_G}=0),"",ROUND(({_G}-{_F})/{_G}*100,1))'
