@@ -2,4 +2,4 @@ streamlit
 requests
 urllib3
 gspread
-google-auth
+google-authaltair
