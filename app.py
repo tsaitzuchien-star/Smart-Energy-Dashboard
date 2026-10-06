@@ -1,16 +1,11 @@
 import streamlit as st
-from dataclasses import replace
 from datetime import datetime, timedelta
 
 import altair as alt
 import pandas as pd
 
 from calendar_tw import load_calendar
-from forecast import (
-    ForecastInputs, compute_forecast,
-    MAG_CHILLER_RT, MAG_CAP_LIMIT, MAG_EFF,
-    OVERTIME_ONTIME,
-)
+from forecast import ForecastInputs, compute_forecast, OVERTIME_ONTIME
 import trend
 from weather import fetch_smart_weather, TARGET_HOURS, TW_TZ
 
@@ -228,33 +223,13 @@ with card_container():
             "🌙 19:30 晚間加班 (維持基礎供應)",
         ], horizontal=True, format_func=short_label)
 
-# --- 側邊欄：兵推與氣象同步 ---
-with st.sidebar:
-    st.info("V4.1：實測校正模型（每週一自動更新）")
-    # 舊版的磁浮平均耗電、太陽能手動設定、隱藏 AHU 手動基載已移除：預測改由實測校正模型決定，
-    # 這三項一律用 ForecastInputs 預設值（與每天 18:00 自動紀錄相同）。
-    st.subheader("🚨 緊急降載沙盤推演")
-    st.caption("當預估需量暴增時，向主管展示降載成效。")
-    emergency_mode = st.toggle("🔴 啟動緊急防禦模式 (兵推)", value=False)
-    if emergency_mode:
-        emergency_mag_limit_pct = st.slider("強制封印磁浮主機上限 (%)", min_value=30, max_value=70, value=int(MAG_CAP_LIMIT * 100), step=5, help="藉由犧牲部分冷度，換取巨大的需量空間")
-        emergency_ahu_drop = st.slider("強迫 AHU 提溫降載 (kW)", min_value=0.0, max_value=37.0, value=20.0, step=1.0, help="模擬現場將 G11, GB1, GB2 溫度調高2度所省下的耗電")
-    else:
-        emergency_mag_limit_pct = int(MAG_CAP_LIMIT * 100)
-        emergency_ahu_drop = 0.0
-
-    st.markdown("---")
-    if st.button("🔄 強制同步最新氣象", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-    st.markdown(f"<div style='color:#5B6875;font-size:13px;margin-top:8px;'>氣象同步時間：<b>{w['fetch_time']}</b></div>", unsafe_allow_html=True)
+# 側邊欄已移除：舊版手動參數、兵推沙盤（公式約高估降載量 2 倍）與強制同步氣象（本來每 5 分鐘自動更新）。
+# 預測一律用 ForecastInputs 預設值，與每天 18:00 自動紀錄相同。
 
 # --- 決策運算（邏輯在 forecast.py，auto_log.py 共用）---
 inp = ForecastInputs(
     conf_hall_status=conf_hall_status, expo_hall_status=expo_hall_status,
     occupancy_rate=occupancy_rate, overtime_status=overtime_status,
-    emergency_mode=emergency_mode, emergency_mag_limit_pct=emergency_mag_limit_pct,
-    emergency_ahu_drop=emergency_ahu_drop,
 )
 fc = compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday)
 
@@ -288,10 +263,6 @@ elif suggested_ice_hrs <= 5:
     lv_txt, lv_bg, lv_fg, lv_dot = "逼近警戒", "#FDF1D3", "#7A4F00", "#F2B632"
 else:
     lv_txt, lv_bg, lv_fg, lv_dot = "超約風險", "#F8DDDA", "#8F1D17", "#B3261E"
-
-if emergency_mode:
-    saved_kw_total = (MAG_CHILLER_RT * (MAG_CAP_LIMIT - inp.active_mag_limit) * MAG_EFF) + emergency_ahu_drop
-    st.markdown(f"<div class='warnbar'>🚨 兵推模式運作中：已強制介入系統參數，預估可為園區緊急省下 {saved_kw_total:.1f} kW 的需量空間。</div>", unsafe_allow_html=True)
 
 SHEET_ID = "1NZ0OPky-I-oWXfFTeVR8qpFT1pFBwQvRoSerJYJJMwY"   # 中創園區空調戰情大數據
 
@@ -512,7 +483,7 @@ with tab_tonight:
         </div>
         """), unsafe_allow_html=True)
 
-# ====================== 氣象、兵推、準確度（首頁下半部）======================
+# ====================== 氣象、準確度（首頁下半部）======================
 with tab_tonight:
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
     def tile(k, v, u=""):
@@ -530,48 +501,19 @@ with tab_tonight:
         cloud_tile = '<div class="tile" style="flex:1.4 1 220px;"><div class="k">雲量</div><div class="v" style="font-size:18px;">雙氣象源皆斷線</div></div>'
     calib = "（高溫動態校正）" if w.get("temp_is_calibrated") else ""
 
-    wcol, ecol = st.columns([2.3, 1])
-    with wcol:
-        st.markdown(html(f"""
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
-            <h3>氣象與太陽能</h3><span class="note">資料擷取 {w['fetch_time']}</span></div>
-          <div class="tiles">
-            {tile("目前園區氣溫" + calib, temp, "°C")}
-            {tile("明日預測最高溫", tmr_temp, "°C")}
-            {tile("目前短波輻射", current_rad, "W/m²")}
-            {tile("明日平均太陽能", f"{est_solar:.1f}", "kW")}
-            {cloud_tile}
-          </div>
-        </div>
-        """), unsafe_allow_html=True)
-    with ecol:
-        if api_is_online:
-            if emergency_mode:
-                base_inp, sim_inp, sim_tag = replace(inp, emergency_mode=False, emergency_mag_limit_pct=int(MAG_CAP_LIMIT * 100), emergency_ahu_drop=0.0), inp, "兵推"
-            else:
-                sim_inp = replace(inp, emergency_mode=True, emergency_mag_limit_pct=40, emergency_ahu_drop=20.0)
-                base_inp, sim_tag = inp, "兵推試算"
-            b = compute_forecast(w, base_inp, now_dt, today_is_holiday, tmr_is_holiday)["max_net_grid_demand"]
-            e = compute_forecast(w, sim_inp, now_dt, today_is_holiday, tmr_is_holiday)["max_net_grid_demand"]
-            scale = max(b, e, 1.0)
-            hint = "" if emergency_mode else "　（預設試算；左側「緊急降載沙盤推演」可自訂並正式啟動）"
-            st.markdown(html(f"""
-            <div class="card">
-              <h3>兵推沙盤</h3>
-              <div class="note" style="margin-bottom:12px;">磁浮上限 {int(MAG_CAP_LIMIT * 100)}% 改 {sim_inp.emergency_mag_limit_pct}%，AHU 降載 {sim_inp.emergency_ahu_drop:.0f} kW{hint}</div>
-              <div class="cmp"><span class="lab">基準</span><div class="tr"><div style="width:{b / scale * 100:.0f}%;background:#F2B632;"></div></div><b>{b:.0f}</b></div>
-              <div class="cmp"><span class="lab" style="width:60px;">{sim_tag}</span><div class="tr"><div style="width:{e / scale * 100:.0f}%;background:#1A7F5A;"></div></div><b>{e:.0f}</b></div>
-              <div style="display:flex;justify-content:space-between;align-items:baseline;">
-                <span class="note">代價：部分區域冷度下降</span>
-                <span class="num" style="font-size:22px;font-weight:800;color:#0F5C41;">省下 {b - e:.0f} kW</span></div>
-            </div>
-            """), unsafe_allow_html=True)
-        else:
-            st.markdown(html("""
-            <div class="card"><h3>兵推沙盤</h3>
-            <div class="note" style="margin-top:6px;">氣象斷線，無法試算。</div></div>
-            """), unsafe_allow_html=True)
+    st.markdown(html(f"""
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
+        <h3>氣象與太陽能</h3><span class="note">資料擷取 {w['fetch_time']}</span></div>
+      <div class="tiles">
+        {tile("目前園區氣溫" + calib, temp, "°C")}
+        {tile("明日預測最高溫", tmr_temp, "°C")}
+        {tile("目前短波輻射", current_rad, "W/m²")}
+        {tile("明日平均太陽能", f"{est_solar:.1f}", "kW")}
+        {cloud_tile}
+      </div>
+    </div>
+    """), unsafe_allow_html=True)
 
     # --- 預測準確度（紀錄累積進度）---
     @st.cache_data(ttl=3600)
