@@ -8,8 +8,8 @@ import pandas as pd
 from calendar_tw import load_calendar
 from forecast import (
     ForecastInputs, compute_forecast,
-    MAG_CHILLER_RT, MAG_CAP_LIMIT, MAG_EFF, SOLAR_MAX_KW,
-    SOLAR_AUTO, SOLAR_MANUAL, AHU_AUTO, OVERTIME_ONTIME,
+    MAG_CHILLER_RT, MAG_CAP_LIMIT, MAG_EFF,
+    OVERTIME_ONTIME,
 )
 import trend
 from weather import fetch_smart_weather, TARGET_HOURS, TW_TZ
@@ -228,32 +228,11 @@ with card_container():
             "🌙 19:30 晚間加班 (維持基礎供應)",
         ], horizontal=True, format_func=short_label)
 
-# --- 側邊欄：進階參數 ---
+# --- 側邊欄：兵推與氣象同步 ---
 with st.sidebar:
-    st.info("V4.0：新版戰情室介面（運算引擎同 V3.9.5）")
-    st.header("⚙️ 進階參數")
-
-    chiller_compensation = st.number_input("預估磁浮主機平均耗電 (kW)", min_value=0.0, max_value=140.0, value=100.0, step=5.0)
-
-    st.markdown("---")
-    st.subheader("🌞 太陽能預測校正")
-    solar_mode = st.radio("太陽能預估模式", [SOLAR_AUTO, SOLAR_MANUAL])
-    if solar_mode == SOLAR_MANUAL:
-        manual_solar = st.slider("手動設定巔峰太陽能 (kW)", min_value=0.0, max_value=SOLAR_MAX_KW, value=80.0, step=1.0)
-    else:
-        manual_solar = 80.0
-
-    st.markdown("---")
-    st.subheader("🎛️ 隱藏空調主機負載 (G11, GB1, GB2)")
-    st.caption("A136 獨立挑高空間熱力學極限")
-    ahu_mode = st.radio("預測模式", [AHU_AUTO, "✋ 手動固定基載"])
-    if ahu_mode == "✋ 手動固定基載":
-        hidden_ahu_load = st.slider("預估隱藏 AHU 耗電 (kW)", min_value=0.0, max_value=50.0, value=23.0, step=1.0)
-    else:
-        st.success("已啟用空間熱力學與排程連動演算")
-        hidden_ahu_load = 23.0
-
-    st.markdown("---")
+    st.info("V4.1：實測校正模型（每週一自動更新）")
+    # 舊版的磁浮平均耗電、太陽能手動設定、隱藏 AHU 手動基載已移除：預測改由實測校正模型決定，
+    # 這三項一律用 ForecastInputs 預設值（與每天 18:00 自動紀錄相同）。
     st.subheader("🚨 緊急降載沙盤推演")
     st.caption("當預估需量暴增時，向主管展示降載成效。")
     emergency_mode = st.toggle("🔴 啟動緊急防禦模式 (兵推)", value=False)
@@ -274,9 +253,6 @@ with st.sidebar:
 inp = ForecastInputs(
     conf_hall_status=conf_hall_status, expo_hall_status=expo_hall_status,
     occupancy_rate=occupancy_rate, overtime_status=overtime_status,
-    chiller_compensation=chiller_compensation,
-    solar_mode=solar_mode, manual_solar=manual_solar,
-    ahu_mode=ahu_mode, hidden_ahu_load=hidden_ahu_load,
     emergency_mode=emergency_mode, emergency_mag_limit_pct=emergency_mag_limit_pct,
     emergency_ahu_drop=emergency_ahu_drop,
 )
@@ -579,7 +555,7 @@ with tab_tonight:
             b = compute_forecast(w, base_inp, now_dt, today_is_holiday, tmr_is_holiday)["max_net_grid_demand"]
             e = compute_forecast(w, sim_inp, now_dt, today_is_holiday, tmr_is_holiday)["max_net_grid_demand"]
             scale = max(b, e, 1.0)
-            hint = "" if emergency_mode else "　（預設試算；左側「進階參數」可自訂並正式啟動）"
+            hint = "" if emergency_mode else "　（預設試算；左側「緊急降載沙盤推演」可自訂並正式啟動）"
             st.markdown(html(f"""
             <div class="card">
               <h3>兵推沙盤</h3>
