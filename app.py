@@ -2,6 +2,7 @@ import streamlit as st
 from dataclasses import replace
 from datetime import datetime, timedelta
 
+import altair as alt
 import pandas as pd
 
 from calendar_tw import load_calendar
@@ -10,6 +11,7 @@ from forecast import (
     MAG_CHILLER_RT, MAG_CAP_LIMIT, MAG_EFF, SOLAR_MAX_KW,
     SOLAR_AUTO, SOLAR_MANUAL, AHU_AUTO, OVERTIME_ONTIME,
 )
+import trend
 from weather import fetch_smart_weather, TARGET_HOURS, TW_TZ
 
 # --- 1. 網頁基本設定（必須是第一個 Streamlit 指令）---
@@ -129,6 +131,13 @@ def show_df(df):
         st.dataframe(df, hide_index=True, width="stretch")
     except TypeError:
         st.dataframe(df, hide_index=True, use_container_width=True)
+
+
+def show_chart(chart):
+    try:
+        st.altair_chart(chart, width="stretch")
+    except TypeError:
+        st.altair_chart(chart, use_container_width=True)
 
 
 # --- 時間與日期 ---
@@ -306,7 +315,35 @@ if emergency_mode:
     saved_kw_total = (MAG_CHILLER_RT * (MAG_CAP_LIMIT - inp.active_mag_limit) * MAG_EFF) + emergency_ahu_drop
     st.markdown(f"<div class='warnbar'>🚨 兵推模式運作中：已強制介入系統參數，預估可為園區緊急省下 {saved_kw_total:.1f} kW 的需量空間。</div>", unsafe_allow_html=True)
 
-tab_tonight, tab_detail, tab_help = st.tabs(["今晚任務", "逐時明細", "參數說明"])
+def open_book():
+    """以 Streamlit Secrets 的 GOOGLE_CREDENTIALS 唯讀開啟紀錄試算表；未設定時拋出例外。"""
+    import json
+    import gspread
+    from google.oauth2.service_account import Credentials
+    raw = st.secrets["GOOGLE_CREDENTIALS"]
+    info = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+    return gspread.authorize(Credentials.from_service_account_info(info, scopes=scopes)).open("中創園區空調戰情大數據")
+
+
+@st.cache_data(ttl=1800)
+def load_trend_sheets():
+    """讀實測需量、主紀錄表、預測與實測比對三張表；回傳 (資料, 錯誤訊息)。"""
+    try:
+        book = open_book()
+    except Exception:
+        return None, "尚未連接紀錄試算表（Streamlit Secrets 需設定 GOOGLE_CREDENTIALS）。"
+    out = {}
+    for key, title in (("actual", "實測需量"), ("log", None), ("compare", "預測與實測比對")):
+        try:
+            ws = book.sheet1 if title is None else book.worksheet(title)
+            out[key] = ws.get_all_values()
+        except Exception:
+            out[key] = []
+    return out, None
+
+
+tab_tonight, tab_detail, tab_trend, tab_help = st.tabs(["今晚任務", "逐時明細", "實測趨勢", "參數說明"])
 
 # ====================== 今晚任務 ======================
 with tab_tonight:
@@ -521,14 +558,7 @@ with tab_tonight:
     def count_log_days():
         """讀 auto_log 寫入的 Google Sheet，回傳 v2 資料列數；未設定憑證或失敗回傳 None。"""
         try:
-            import json
-            import gspread
-            from google.oauth2.service_account import Credentials
-            raw = st.secrets["GOOGLE_CREDENTIALS"]
-            info = json.loads(raw) if isinstance(raw, str) else dict(raw)
-            scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-            sheet = gspread.authorize(Credentials.from_service_account_info(info, scopes=scopes)).open("中創園區空調戰情大數據").sheet1
-            return sum(1 for v in sheet.col_values(15)[1:] if str(v).startswith("v2"))
+            return sum(1 for v in open_book().sheet1.col_values(15)[1:] if str(v).startswith("v2"))
         except Exception:
             return None
 
@@ -580,6 +610,72 @@ with tab_detail:
         show_df(detail_df(calc_today))
     else:
         st.warning("📡 API 暫時斷線。")
+
+# ====================== 實測趨勢 ======================
+with tab_trend:
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    sheets, err = load_trend_sheets()
+    actual = trend.parse_actual(sheets["actual"]) if sheets else {}
+    if err or not actual:
+        st.info(err or "「實測需量」工作表還沒有資料。")
+    else:
+        fc_hourly = trend.parse_compare(sheets["compare"])
+        # 每日紀錄優先；沒有紀錄的日子（6/8–9/30 歷史氣象回測）用比對表逐時預測的當日最高
+        fc_daily = {**trend.daily_from_hourly(fc_hourly), **trend.parse_forecast_log(sheets["log"])}
+        daily = trend.daily_table(actual, fc_daily)
+        span = st.radio("期間", ["近 30 天", "近 90 天", "全部"], index=2, horizontal=True)
+        if span != "全部":
+            cut = daily["日期"].max() - pd.Timedelta(days=30 if span == "近 30 天" else 90)
+            daily = daily[daily["日期"] >= cut]
+
+        last = daily.dropna(subset=["距契約最近(kW)"])
+        worst = last.loc[last["距契約最近(kW)"].idxmin()] if not last.empty else None
+        both = daily.dropna(subset=["實測日間最高(kW)", "預測最高(kW)"])
+        c1, c2, c3 = st.columns(3)
+        c1.metric("期間日間最高", f'{daily["實測日間最高(kW)"].max():.0f} kW')
+        if worst is not None:
+            c2.metric("距契約最近", f'{worst["距契約最近(kW)"]:.1f} kW',
+                      f'{worst["日期"]:%m/%d} {worst["距契約最近時段"]}', delta_color="off")
+        c3.metric("預測平均誤差", f'{both["誤差(kW)"].abs().mean():.0f} kW' if not both.empty else "—",
+                  f"{len(both)} 天可比對", delta_color="off")
+
+        long = daily.melt(id_vars=["日期", "星期"], value_vars=["實測日間最高(kW)", "預測最高(kW)"],
+                          var_name="項目", value_name="kW").dropna(subset=["kW"])
+        color = alt.Scale(domain=["實測日間最高(kW)", "預測最高(kW)"], range=["#1E4F8C", "#E07A1F"])
+        lines = alt.Chart(long).mark_line(point=alt.OverlayMarkDef(size=28)).encode(
+            x=alt.X("日期:T", title=None, axis=alt.Axis(format="%m/%d")),
+            y=alt.Y("kW:Q", title="kW", scale=alt.Scale(domain=[0, 640])),
+            color=alt.Color("項目:N", scale=color, legend=alt.Legend(orient="top", title=None)),
+            tooltip=[alt.Tooltip("日期:T", format="%Y-%m-%d"), "星期", "項目", alt.Tooltip("kW:Q", format=".1f")])
+        refs = pd.DataFrame({"kW": [452, 516], "線": ["尖峰 452", "半尖峰 516"]})
+        rules = alt.Chart(refs).mark_rule(strokeDash=[6, 4], color="#B3261E").encode(y="kW:Q", tooltip=["線"])
+        st.markdown("**每日日間最高需量（08:00–18:00，每小時最大 15 分鐘平均）**")
+        show_chart((lines + rules).properties(height=320))
+        if both.empty:
+            st.caption("目前還沒有同一天同時有預測與實測的資料：預測從每日 18:00 自動紀錄開始累積，"
+                       "實測需請監控廠商匯出後貼到「實測需量」工作表。兩邊都有之後，橘線會出現在同一天。")
+
+        st.markdown("**單日逐時曲線**")
+        days = sorted(daily["日期"].dt.date.unique(), reverse=True)
+        pick = st.selectbox("日期", days, format_func=lambda d: f"{d:%Y-%m-%d}（{trend.WEEKDAYS[d.weekday()]}）")
+        hourly = trend.hourly_table(pick, actual, fc_hourly)
+        hl = hourly.melt(id_vars=["時間", "時段"], value_vars=["實測(kW)", "預測(kW)"],
+                         var_name="項目", value_name="kW").dropna(subset=["kW"])
+        hcolor = alt.Scale(domain=["實測(kW)", "預測(kW)"], range=["#1E4F8C", "#E07A1F"])
+        h_lines = alt.Chart(hl).mark_line(point=True).encode(
+            x=alt.X("時間:T", title=None, axis=alt.Axis(format="%H:%M")),
+            y=alt.Y("kW:Q", title="kW", scale=alt.Scale(domain=[0, 640])),
+            color=alt.Color("項目:N", scale=hcolor, legend=alt.Legend(orient="top", title=None)),
+            tooltip=[alt.Tooltip("時間:T", format="%H:%M"), "時段", "項目", alt.Tooltip("kW:Q", format=".1f")])
+        h_lim = alt.Chart(hourly).mark_line(interpolate="step-after", strokeDash=[6, 4], color="#B3261E").encode(
+            x="時間:T", y="契約上限(kW):Q", tooltip=["時段", "契約上限(kW)"])
+        show_chart((h_lines + h_lim).properties(height=280))
+
+        with st.expander("每日明細"):
+            show_df(daily.sort_values("日期", ascending=False).assign(日期=lambda x: x["日期"].dt.strftime("%Y-%m-%d")))
+        st.caption("實測為監控主機每分鐘瞬間值換算的 15 分鐘平均（台電計費方式）；空白代表監控當天停機或保養，不補值。"
+                   "2026/6/8–9/30 的預測是事後用當時歷史氣象回測重算（氣象接近實況，誤差主要來自負載模型），"
+                   "之後的預測則是每天 18:00 實際產生的紀錄。")
 
 # ====================== 參數說明 ======================
 with tab_help:
