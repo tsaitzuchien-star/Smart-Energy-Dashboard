@@ -545,7 +545,7 @@ with tab_tonight:
       </div>
       <div class="note" style="flex:1 1 280px;line-height:1.6;">{acc_note}</div>
     </div>
-    <div class="note" style="margin-top:14px;">設備參數：CHU-2（磁浮冰機）· BCU-1（儲冰主機）· IB-1（2500 RT-HR）· AHU-G11 / GB1 / GB2</div>
+    <div class="note" style="margin-top:14px;">設備參數：CHU-2（磁浮冰機 240 RT）· BCU-1（儲冰主機）· IB-1（2500 RT-HR）· AHU-G11 / GB1 / GB2</div>
     """), unsafe_allow_html=True)
 
 with tab_detail:
@@ -654,7 +654,7 @@ with tab_help:
 
 **需量怎麼算**：歷史基礎需量 + 進駐加載 + 空調熱力與慣性加載 − 磁浮降載（尖峰 16:00 起全關、由融冰供冷；其他時段封印 50%）− 太陽能 = 預估台電需量。園區空調供應時間 07:30–18:00。
 
-**設備參數**：CHU-2（磁浮冰機）· BCU-1（儲冰主機）· IB-1（2500 RT-HR）· AHU-G11 / GB1 / GB2。
+**設備參數**：CHU-2（磁浮冰機 240 RT）· BCU-1（儲冰主機）· IB-1（2500 RT-HR）· AHU-G11 / GB1 / GB2。
 
 以上皆為預測值，不等於台電實測需量。
 """)
