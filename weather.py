@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 TW_TZ = timezone(timedelta(hours=8))
 LAT, LON = "23.936537", "120.697917"
-TARGET_HOURS = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]
+TARGET_HOURS = [f"{h:02d}:00" for h in range(7, 19)]   # 07:00–18:00 每小時（空調 07:30–18:00）
 
 
 def wmo_to_text(wmo):
@@ -61,6 +61,18 @@ def apply_open_meteo(res, r, now, target_hours=TARGET_HOURS):
         if t_tm in times_list:
             idx = times_list.index(t_tm)
             res["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "c_low": r['hourly']['cloud_cover_low'][idx], "c_mid": r['hourly']['cloud_cover_mid'][idx], "c_high": r['hourly']['cloud_cover_high'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
+    # 校正模型用的逐時氣象（今日／明日 0–23 時）：{小時: {T, RH, CC, R, P}}；回測資料缺的欄位就不放
+    for key, prefix in (("model_wx_today", today_prefix), ("model_wx_tmr", tmr_prefix)):
+        res[key] = {}
+        for i, t in enumerate(times_list):
+            if t.startswith(prefix):
+                wx = {}
+                for f, var in (("T", "temperature_2m"), ("RH", "relative_humidity_2m"), ("CC", "cloud_cover"),
+                               ("R", "shortwave_radiation"), ("P", "precipitation")):
+                    v = r['hourly'].get(var, [None] * len(times_list))[i]
+                    if v is not None:
+                        wx[f] = v
+                res[key][int(t.split("T")[1][:2])] = wx
     try: res["tmr_temp"] = max([r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)])
     except: res["tmr_temp"] = res["hourly"].get("12:00", {}).get("temp", 28.0)
     try: res["tmr_rad"] = int(sum([r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]) / len(range(8, 17, 2)))
@@ -92,7 +104,7 @@ def fetch_smart_weather(vc_key=None, now=None, session=None):
     vc_parsed = None
 
     try:
-        om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
+        om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&hourly=temperature_2m,relative_humidity_2m,precipitation,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
         r_om = session.get(om_url, timeout=5)
         if r_om.status_code == 200:
             apply_open_meteo(res, r_om.json(), now, target_hours)

@@ -1,0 +1,33 @@
+name: 每週自動校正需量模型
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'   # 每週一 10:00（台灣時間）
+  workflow_dispatch:
+  push:   # 暫時：在 PR 分支上試跑，合併前移除
+    branches: [claude/calibrated-model]
+    paths: [calibrate.py, .github/workflows/calibrate.yml]
+
+jobs:
+  calibrate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install requests urllib3 gspread google-auth
+      - name: 用最新實測重新擬合
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python calibrate.py
+      - name: 模型有變才提交（儀表板會自動重新部署）
+        run: |
+          if git diff --quiet model/demand_model.json; then echo "模型沒有變化"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add model/demand_model.json
+          git commit -m "自動校正需量模型（資料至 $(python -c 'import json;print(json.load(open("model/demand_model.json"))["trained_through"])')）"
+          git push
