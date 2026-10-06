@@ -1,0 +1,6 @@
+histfc_ecmwf_ifs 200 213608
+histfc_best_match 200 213609
+prevruns_ecmwf_ifs025 200 329091
+prevruns_best_match 200 328217
+prevruns_ecmwf_ifs 200 328217
+era5 200 213609
