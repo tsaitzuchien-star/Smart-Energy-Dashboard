@@ -14,7 +14,7 @@ from weather import TARGET_HOURS
 ICE_CHILLER_KW = 241.0
 ICE_CHILLER_CAP_RT = 242.5
 ICE_BANK_MAX_RTHR = 2500.0
-MAG_CHILLER_RT = 200.0
+MAG_CHILLER_RT = 240.0
 MAG_CAP_LIMIT = 0.50
 AC_START, AC_END = "07:30", "18:00"          # 園區空調供應時間
 PEAK_MELT_HRS = 2.0                          # 夏月平日 16:00–18:00 融冰全量取代磁浮
