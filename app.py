@@ -315,6 +315,9 @@ if emergency_mode:
     saved_kw_total = (MAG_CHILLER_RT * (MAG_CAP_LIMIT - inp.active_mag_limit) * MAG_EFF) + emergency_ahu_drop
     st.markdown(f"<div class='warnbar'>🚨 兵推模式運作中：已強制介入系統參數，預估可為園區緊急省下 {saved_kw_total:.1f} kW 的需量空間。</div>", unsafe_allow_html=True)
 
+SHEET_ID = "1NZ0OPky-I-oWXfFTeVR8qpFT1pFBwQvRoSerJYJJMwY"   # 中創園區空調戰情大數據
+
+
 def open_book():
     """以 Streamlit Secrets 的 GOOGLE_CREDENTIALS 唯讀開啟紀錄試算表；未設定時拋出例外。"""
     import json
@@ -323,16 +326,27 @@ def open_book():
     raw = st.secrets["GOOGLE_CREDENTIALS"]
     info = json.loads(raw) if isinstance(raw, str) else dict(raw)
     scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-    return gspread.authorize(Credentials.from_service_account_info(info, scopes=scopes)).open("中創園區空調戰情大數據")
+    # 用試算表 ID 開啟：依名稱開啟要透過 Drive 搜尋，唯讀 Sheets 權限不夠
+    return gspread.authorize(Credentials.from_service_account_info(info, scopes=scopes)).open_by_key(SHEET_ID)
+
+
+def load_trend_sheets():
+    """讀實測需量、主紀錄表、預測與實測比對三張表；回傳 (資料, 錯誤訊息)。失敗不快取，修好設定後重新整理即可。"""
+    try:
+        has_creds = "GOOGLE_CREDENTIALS" in st.secrets
+    except Exception:   # 完全沒有 secrets 檔（本機執行）
+        has_creds = False
+    if not has_creds:
+        return None, "尚未連接紀錄試算表（Streamlit Secrets 需設定 GOOGLE_CREDENTIALS）。"
+    try:
+        return _read_trend_sheets(), None
+    except Exception as e:
+        return None, f"讀取紀錄試算表失敗：{type(e).__name__}: {str(e)[:200]}"
 
 
 @st.cache_data(ttl=1800)
-def load_trend_sheets():
-    """讀實測需量、主紀錄表、預測與實測比對三張表；回傳 (資料, 錯誤訊息)。"""
-    try:
-        book = open_book()
-    except Exception:
-        return None, "尚未連接紀錄試算表（Streamlit Secrets 需設定 GOOGLE_CREDENTIALS）。"
+def _read_trend_sheets():
+    book = open_book()
     out = {}
     for key, title in (("actual", "實測需量"), ("log", None), ("compare", "預測與實測比對")):
         try:
@@ -340,7 +354,7 @@ def load_trend_sheets():
             out[key] = ws.get_all_values()
         except Exception:
             out[key] = []
-    return out, None
+    return out
 
 
 tab_tonight, tab_detail, tab_trend, tab_help = st.tabs(["今晚任務", "逐時明細", "實測趨勢", "參數說明"])
