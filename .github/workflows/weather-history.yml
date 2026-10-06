@@ -19,12 +19,13 @@ jobs:
       - run: pip install requests
       - run: python tools/fetch_weather_history.py 2026-06-01 2026-10-05 /tmp/wx
       - name: 結果推到 claude/weather-history-results 分支
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan wx-results
           git rm -rfq .
-          cp /tmp/wx/*.json .
-          git add *.json
+          cp /tmp/wx/* .
+          git add -A
           git commit -qm "歷史氣象 2026-06-01 → 2026-10-05"
           git push -f origin HEAD:claude/weather-history-results

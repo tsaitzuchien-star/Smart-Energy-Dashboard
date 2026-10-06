@@ -19,15 +19,26 @@ PREV_VARS = ["temperature_2m", "relative_humidity_2m", "cloud_cover", "cloud_cov
 
 
 def get(url, name, out):
-    for i in range(4):
-        r = requests.get(url, timeout=120)
-        print(name, r.status_code, len(r.content))
-        if r.status_code == 200:
-            with open(os.path.join(out, name + ".json"), "w") as f:
-                f.write(r.text)
-            return
-        print(r.text[:300])
+    """失敗不中斷，狀態寫進 log.txt，方便在無法看 Actions 日誌時排查。"""
+    for i in range(3):
+        try:
+            r = requests.get(url, timeout=180)
+            msg = f"{name} {r.status_code} {len(r.content)}"
+            if r.status_code == 200:
+                with open(os.path.join(out, name + ".json"), "w") as f:
+                    f.write(r.text)
+                _log(out, msg)
+                return
+            _log(out, msg + " " + r.text[:300])
+        except Exception as e:
+            _log(out, f"{name} EXC {type(e).__name__}: {e}"[:400])
         time.sleep(5 * (i + 1))
+
+
+def _log(out, msg):
+    print(msg)
+    with open(os.path.join(out, "log.txt"), "a") as f:
+        f.write(msg + "\n")
 
 
 def main(start, end, out):
