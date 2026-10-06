@@ -42,6 +42,59 @@ class AutoLogTests(unittest.TestCase):
         self.assertEqual(d["明日是否假日"], "是")
         self.assertEqual(d["建議今晚儲冰(小時)"], 0.0)
 
+    def test_compare_rows(self):
+        now = datetime(2026, 9, 30, 18, 0, tzinfo=TZ)            # 明日 10/1 週四，夏月
+        rows = auto_log.build_compare_rows(now, fake_weather(now), self.cal)
+        self.assertEqual(len(rows), 6)
+        for r in rows:
+            self.assertEqual(len(r), len(auto_log.COMPARE_HEADERS))
+        d = {r[1]: dict(zip(auto_log.COMPARE_HEADERS, r)) for r in rows}
+        self.assertEqual(d["08:00"]["日期"], "2026-10-01")
+        self.assertEqual(d["08:00"]["星期"], "四")
+        self.assertEqual(d["08:00"]["契約上限(kW)"], 616.0)
+        self.assertEqual(d["10:00"]["台電時段"], "半尖峰")
+        self.assertEqual(d["16:00"]["契約上限(kW)"], 452.0)
+        self.assertIn(auto_log.ACTUAL_TAB, d["16:00"]["實測需量(kW)"])
+        self.assertTrue(d["16:00"]["誤差(實測−預測 kW)"].startswith("="))
+
+    def test_compare_rows_offline_empty(self):
+        now = datetime(2026, 9, 30, 18, 0, tzinfo=TZ)
+        w = fake_weather(now); w["status_code"] = 0
+        self.assertEqual(auto_log.build_compare_rows(now, w, self.cal), [])
+
+    def test_write_compare_rows_creates_tab_and_skips_duplicates(self):
+        try:
+            import gspread
+        except ImportError:
+            self.skipTest("gspread 未安裝")
+
+        class FakeWS:
+            def __init__(self): self.data = []
+            def row_values(self, i): return self.data[i - 1] if len(self.data) >= i else []
+            def col_values(self, i): return [r[i - 1] for r in self.data]
+            def update(self, range_name, values):
+                if self.data: self.data[0] = values[0]
+                else: self.data.append(values[0])
+            def append_rows(self, rows, value_input_option=None): self.data.extend(rows)
+
+        class FakeBook:
+            def __init__(self): self.tabs = {}
+            def worksheet(self, name):
+                if name not in self.tabs: raise gspread.WorksheetNotFound(name)
+                return self.tabs[name]
+            def add_worksheet(self, title, rows, cols):
+                self.tabs[title] = FakeWS(); return self.tabs[title]
+
+        now = datetime(2026, 9, 30, 18, 0, tzinfo=TZ)
+        rows = auto_log.build_compare_rows(now, fake_weather(now), self.cal)
+        book = FakeBook()
+        auto_log.write_compare_rows(book, rows)
+        auto_log.write_compare_rows(book, rows)
+        ws = book.tabs[auto_log.COMPARE_TAB]
+        self.assertEqual(ws.data[0], auto_log.COMPARE_HEADERS)
+        self.assertEqual(len(ws.data), 1 + len(rows))
+        self.assertEqual(book.tabs[auto_log.ACTUAL_TAB].data, [auto_log.ACTUAL_HEADERS])
+
     def test_offline_returns_none(self):
         now = datetime(2026, 9, 30, 18, 0, tzinfo=TZ)
         w = fake_weather(now); w["status_code"] = 0
