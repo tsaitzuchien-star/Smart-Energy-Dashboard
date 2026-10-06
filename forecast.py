@@ -14,7 +14,10 @@ ICE_CHILLER_CAP_RT = 242.5
 ICE_BANK_MAX_RTHR = 2500.0
 MAG_CHILLER_RT = 200.0
 MAG_CAP_LIMIT = 0.50
+AC_START, AC_END = "07:30", "18:00"          # 園區空調供應時間
+PEAK_MELT_HRS = 2.0                          # 夏月平日 16:00–18:00 融冰全量取代磁浮
 MAG_EFF = 0.7
+MAG_PEAK_OFF_KW = MAG_CHILLER_RT * MAG_EFF   # 尖峰時段磁浮全關，冷房全由融冰供應
 SOLAR_MAX_KW = 145.0
 
 SOLAR_AUTO = "🤖 API 短波輻射精準推算"
@@ -169,24 +172,25 @@ def _hourly_loop(w, inp, *, is_tmr, day, is_holiday, event_kw, base_load, actual
         dynamic_load = (h_ahu + max(0, (smoothed_temp - 25.0) * 5.5)) * shading_factor
 
         hour_int = int(h[:2])
+        period = tou_period(day, hour_int)
+        h_shaved = MAG_PEAK_OFF_KW if period == "尖峰" else shaved_kw
         if hour_int >= 18:  # 18:00 動態卸載與下班邏輯
             if is_holiday:
                 h_load = 160.0 + event_kw
             elif inp.overtime_status == OVERTIME_ONTIME:
                 h_load = 160.0
             else:
-                h_load = base_load + (actual_load * 0.3) + (dynamic_load * 0.5) - shaved_kw
+                h_load = base_load + (actual_load * 0.3) + (dynamic_load * 0.5) - h_shaved
         else:
-            h_load = (160.0 + event_kw) if is_holiday else base_load + actual_load + dynamic_load - shaved_kw
+            h_load = (160.0 + event_kw) if is_holiday else base_load + actual_load + dynamic_load - h_shaved
 
         h_net = h_load - h_solar
-        period = tou_period(day, hour_int)
         limit = _PERIOD_LIMIT[period]
         gap = h_net - limit
 
         calc[h] = {"temp": h_temp, "rad": h_rad, "wx": h_data["wx"], "c_low": c_low, "c_mid": c_mid,
                    "c_high": h_data.get("c_high", 0), "cp": cp, "h_solar": h_solar, "h_load": h_load,
-                   "h_net": h_net, "shading_factor": shading_factor, "current_limit": limit, "period": period}
+                   "h_net": h_net, "shading_factor": shading_factor, "current_limit": limit, "period": period, "h_shaved": h_shaved}
 
         if gap > max_gap:
             max_gap = gap
@@ -260,7 +264,13 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
     demand_gap = max_net_grid_demand - (worst_limit_tmr - 15.0)
     needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
 
-    extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - inp.active_mag_limit) * 4.0 if not tmr_is_holiday else 0.0
+    tmr_has_peak = tou_period(tmr_dt.date(), 16) == "尖峰"
+    if tmr_is_holiday:
+        extra_ice_rthr_for_cooling = 0.0
+    elif tmr_has_peak:  # 16:00 起磁浮全關，融冰全量供冷到空調結束
+        extra_ice_rthr_for_cooling = MAG_CHILLER_RT * PEAK_MELT_HRS
+    else:
+        extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - inp.active_mag_limit) * 4.0
     extra_ice_rthr_for_cooling += event_ice_rthr
 
     is_pure_holiday = tmr_is_holiday and event_ice_rthr == 0.0
@@ -283,8 +293,8 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
             start_minutes += 24 * 60
         start_time_str, end_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00"
         time_color = "#D2691E"
-        if is_summer_tmr:
-            melt_start, melt_end, melt_memo = "13:00", "19:00", "*配合新制夜尖峰(16:00-22:00)，延後融冰。"
+        if tmr_has_peak:
+            melt_start, melt_end, melt_memo = "16:00", AC_END, f"*尖峰 16:00 起磁浮全關，融冰全量供冷至 {AC_END} 空調結束。"
         else:
             melt_start, melt_end, melt_memo = "10:00", "16:00", "*依 IB-1 設計 13°C 進水條件執行。"
 
@@ -300,7 +310,8 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
         "worst_hour_load": worst_hour_load, "worst_hour_solar": worst_hour_solar,
         "worst_limit_tmr": worst_limit_tmr, "est_solar": est_solar,
         "event_ice_rthr": event_ice_rthr, "event_kw": event_kw,
-        "tmr_true_base_load": base_load, "tmr_actual_load_growth": actual_load, "tmr_shaved_kw": shaved_kw,
+        "tmr_true_base_load": base_load, "tmr_actual_load_growth": actual_load, "tmr_shaved_kw": calc_tmr[worst_hour]["h_shaved"] if worst_hour in calc_tmr else shaved_kw,
+        "tmr_has_peak": tmr_has_peak,
         "is_pure_holiday": is_pure_holiday, "is_holiday_event": is_holiday_event,
         "suggested_ice_hrs": suggested_ice_hrs,
         "start_time_str": start_time_str, "end_time_str": end_time_str, "time_color": time_color,
