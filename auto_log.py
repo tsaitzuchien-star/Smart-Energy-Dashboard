@@ -26,6 +26,17 @@ HEADERS = [
 ]
 SHEET_NAME = "中創園區空調戰情大數據"
 
+# 第二個工作表：明日逐時預測，一時段一列；「實測需量」欄留空，由監控廠商資料或人工填入後自動算誤差
+COMPARE_TAB = "預測與實測比對"
+COMPARE_HEADERS = [
+    "日期", "時間", "星期", "台電時段", "契約上限(kW)", "預測需量(kW)", "實測需量(kW)",
+    "誤差(實測−預測 kW)", "誤差(%)", "預測產生時間", "資料版本",
+]
+WEEKDAYS = "一二三四五六日"
+_G, _F = 'INDIRECT("G"&ROW())', 'INDIRECT("F"&ROW())'
+ERR_KW = f'=IF({_G}="","",{_G}-{_F})'
+ERR_PCT = f'=IF(OR({_G}="",{_G}=0),"",ROUND(({_G}-{_F})/{_G}*100,1))'
+
 
 def build_row(now, w, cal, inp=None):
     """由真實氣象與行事曆算出一列資料；氣象斷線回傳 None。"""
@@ -51,6 +62,37 @@ def build_row(now, w, cal, inp=None):
     ]
 
 
+def build_compare_rows(now, w, cal, inp=None):
+    """明日逐時預測，每個預測時段一列；氣象斷線回傳 []。"""
+    if w["status_code"] == 0:
+        return []
+    inp = inp or ForecastInputs()
+    tmr = now + timedelta(days=1)
+    fc = compute_forecast(w, inp, now, cal.is_holiday(now.date()), cal.is_holiday(tmr.date()))
+    day = tmr.strftime("%Y-%m-%d")
+    return [
+        [day, h, WEEKDAYS[tmr.weekday()], d["period"], d["current_limit"], round(d["h_net"], 1), "",
+         ERR_KW, ERR_PCT, w["fetch_time"], DATA_VERSION]
+        for h, d in fc["calc_tmr"].items()
+    ]
+
+
+def write_compare_rows(book, rows):
+    """寫入比對工作表；同一天已寫過就略過（Actions 重跑不重複）。"""
+    import gspread
+    try:
+        ws = book.worksheet(COMPARE_TAB)
+    except gspread.WorksheetNotFound:
+        ws = book.add_worksheet(title=COMPARE_TAB, rows=1000, cols=len(COMPARE_HEADERS))
+    if ws.row_values(1) != COMPARE_HEADERS:
+        ws.update(range_name="A1", values=[COMPARE_HEADERS])
+    if rows[0][0] in ws.col_values(1):
+        log.info("ℹ️ %s 的逐時預測已存在，略過", rows[0][0])
+        return
+    ws.append_rows(rows, value_input_option="USER_ENTERED")
+    log.info("✅ 成功寫入 %d 筆逐時預測到「%s」", len(rows), COMPARE_TAB)
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     creds_json_str = os.environ.get("GOOGLE_CREDENTIALS")
@@ -73,13 +115,18 @@ def main():
     from google.oauth2.service_account import Credentials
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     client = gspread.authorize(Credentials.from_service_account_info(json.loads(creds_json_str), scopes=scopes))
-    sheet = client.open(SHEET_NAME).sheet1
+    book = client.open(SHEET_NAME)
+    sheet = book.sheet1
 
     if sheet.row_values(1) != HEADERS:
         # 舊表頭是 11 欄（且舊資料為假資料）；更新第 1 列，舊資料列的「資料版本」欄為空即可辨識
         sheet.update(range_name="A1", values=[HEADERS])
     sheet.append_row(row, value_input_option="USER_ENTERED")
     log.info("✅ 成功寫入：%s", dict(zip(HEADERS, row)))
+
+    compare_rows = build_compare_rows(now, w, cal)
+    if compare_rows:
+        write_compare_rows(book, compare_rows)
     return 0
 
 
