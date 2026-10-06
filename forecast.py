@@ -5,7 +5,9 @@ app.py 與 auto_log.py 共用同一份運算，避免兩邊數字不一致。
 """
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import lru_cache
 
+import demand_model
 from weather import TARGET_HOURS
 
 # --- 原廠硬體規格 ---
@@ -19,6 +21,14 @@ PEAK_MELT_HRS = 2.0                          # 夏月平日 16:00–18:00 融冰
 MAG_EFF = 0.7
 MAG_PEAK_OFF_KW = MAG_CHILLER_RT * MAG_EFF   # 尖峰時段磁浮全關，冷房全由融冰供應
 SOLAR_MAX_KW = 145.0
+
+# --- 即時需量控制（值班依中央監控手動調磁浮 0–100%；數值＝該時段契約上限減去以下餘裕）---
+DL_ALERT_RATIO = 0.90      # 預警：與現場 call 報系統一致，契約 90% 時通知同仁
+DL_ACTION_MARGIN = 36.0    # 動作：磁浮降至 50%（尖峰時磁浮已關則降 AHU），融冰補足
+DL_RELEASE_MARGIN = 66.0   # 解除：連續 15 分鐘低於此值才恢復
+SHED_KW = 75.0             # 實測磁浮全關可降的需量（夏月 15:30→16:15 平均 73.8 kW）
+SHED_HOURS = 2.0           # 早上保留可應付 2 小時降載的冰量
+RISK_TRIGGER_MARGIN = 60.0 # 明日最壞情況（P95）距上限小於此值時，預留降載冰量
 
 SOLAR_AUTO = "🤖 API 短波輻射精準推算"
 SOLAR_MANUAL = "✋ 廠務手動強制設定"
@@ -198,8 +208,63 @@ def _hourly_loop(w, inp, *, is_tmr, day, is_holiday, event_kw, base_load, actual
     return calc, worst
 
 
-def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
-    """主運算。w＝weather.fetch_smart_weather() 的結果；回傳所有 UI／紀錄需要的數值。"""
+def _loads(inp, month):
+    """物理模型的基礎需量、進駐加載、磁浮降載量。"""
+    ice_rest = inp.chiller_compensation if 1 <= month <= 5 else 0.0
+    return (HISTORICAL_MAX_DEMAND.get(month, 400) + ice_rest, 70.0 * (inp.occupancy_rate / 100.0),
+            MAG_CHILLER_RT * (1.0 - inp.active_mag_limit) * MAG_EFF)
+
+
+@lru_cache(maxsize=1)
+def _default_model():
+    return demand_model.load()
+
+
+def _worst(calc):
+    """缺口（需量 − 該時段上限）最大的時段。"""
+    worst, max_gap = {"net": 0.0, "hour": "未知", "load": 0.0, "solar": 0.0}, -9999.0
+    for h, c in calc.items():
+        gap = c["h_net"] - c["current_limit"]
+        if gap > max_gap:
+            max_gap, worst = gap, {"net": c["h_net"], "hour": h, "load": c["h_load"], "solar": c["h_solar"]}
+    return worst
+
+
+def _apply_model(model, calc, calc_base, wx, day, is_holiday):
+    """把逐時需量換成實測校正模型的預測；側邊欄調整（活動、進駐率、兵推）以物理模型的差值疊加上去。"""
+    dt = demand_model.day_type(is_holiday)
+    mag_off = {h for h in demand_model.HOURS if not is_holiday and h < 18 and tou_period(day, h) == "尖峰"}
+    preds = demand_model.predict_day(model, dt, wx or {}, mag_off)
+    adj = {}
+    for h, c in calc.items():
+        hr = int(h[:2])
+        if hr not in preds:
+            continue
+        delta = c["h_net"] - calc_base[h]["h_net"] if h in calc_base else 0.0
+        c["h_net_phys"], c["h_net"], c["source"] = c["h_net"], preds[hr] + delta, "實測校正"
+        adj[hr] = preds[hr] + delta
+    return dt, adj
+
+
+def _risk_blocks(model, dt, adj, day):
+    """明日各時段最壞情況（P95）與即時控制門檻。"""
+    out = {}
+    for blk, (lo, hi) in demand_model.block_upper(model, dt, adj).items():
+        hrs = [h for h in demand_model.BLOCKS[blk] if h in adj]
+        limit = min(contract_limit_at(day, h) for h in hrs)
+        out[blk] = {"hours": f"{hrs[0]:02d}:00–{hrs[-1] + 1:02d}:00", "pred": lo, "p95": hi, "limit": limit,
+                    "margin": limit - hi, "action": limit - DL_ACTION_MARGIN, "alert": limit * DL_ALERT_RATIO,
+                    "release": limit - DL_RELEASE_MARGIN, "period": tou_period(day, hrs[0])}
+    return out
+
+
+def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="auto"):
+    """主運算。w＝weather.fetch_smart_weather() 的結果；回傳所有 UI／紀錄需要的數值。
+
+    model：實測校正模型（demand_model）；"auto" 讀 model/demand_model.json，None 則只用原本的物理模型。
+    """
+    if model == "auto":
+        model = _default_model()
     tmr_dt = now_dt + timedelta(days=1)
     current_month = now_dt.month
     is_summer_today = is_summer_day(now_dt)
@@ -209,10 +274,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
     base_load_historical = HISTORICAL_MAX_DEMAND.get(current_month, 400)
     api_is_online = w["status_code"] > 0
 
-    ice_rest = inp.chiller_compensation if 1 <= current_month <= 5 else 0.0
-    base_load = base_load_historical + ice_rest          # 今日／明日相同
-    actual_load = 70.0 * (inp.occupancy_rate / 100.0)
-    shaved_kw = MAG_CHILLER_RT * (1.0 - inp.active_mag_limit) * MAG_EFF
+    base_load, actual_load, shaved_kw = _loads(inp, current_month)   # 今日／明日相同
 
     event_ice_rthr = 0.0
     if "半天" in inp.conf_hall_status: event_ice_rthr += 75.0
@@ -222,6 +284,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
     event_kw = (event_ice_rthr / 6.0) * MAG_EFF if event_ice_rthr > 0 else 0.0
 
     calc_today, calc_tmr = {}, {}
+    risk, model_used, pv_tmr = {}, False, None
     today_max_net, today_worst_hour = 0.0, "未知"
     max_net_grid_demand, worst_hour, worst_hour_load, worst_hour_solar = 0.0, "未知", 0.0, 0.0
     worst_limit_tmr = contract_limit
@@ -235,8 +298,27 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
         max_net_grid_demand, worst_hour = wm["net"], wm["hour"]
         worst_hour_load, worst_hour_solar = wm["load"], wm["solar"]
 
+        if model and "model_wx_tmr" in w:
+            base_inp = ForecastInputs()
+            bl, al, sk = _loads(base_inp, current_month)
+            base_today, _ = _hourly_loop(w, base_inp, is_tmr=False, day=now_dt.date(), is_holiday=today_is_holiday,
+                                         event_kw=0.0, base_load=bl, actual_load=al, shaved_kw=sk)
+            base_tmr, _ = _hourly_loop(w, base_inp, is_tmr=True, day=tmr_dt.date(), is_holiday=tmr_is_holiday,
+                                       event_kw=0.0, base_load=bl, actual_load=al, shaved_kw=sk)
+            _apply_model(model, calc_today, base_today, w.get("model_wx_today"), now_dt.date(), today_is_holiday)
+            dt_tmr, adj_tmr = _apply_model(model, calc_tmr, base_tmr, w.get("model_wx_tmr"), tmr_dt.date(), tmr_is_holiday)
+            risk = _risk_blocks(model, dt_tmr, adj_tmr, tmr_dt.date())
+            model_used = True
+            pv_tmr = demand_model.day_pv(model, w.get("model_wx_tmr") or {})
+            wt, wm = _worst(calc_today), _worst(calc_tmr)
+            today_max_net, today_worst_hour = wt["net"], wt["hour"]
+            max_net_grid_demand, worst_hour = wm["net"], wm["hour"]
+            worst_hour_load, worst_hour_solar = wm["load"], wm["solar"]
+
         avg_cp = sum([calc_tmr[h]["cp"] for h in calc_tmr]) / len(calc_tmr) if calc_tmr else 1.0
-        if inp.solar_mode == SOLAR_AUTO:
+        if inp.solar_mode == SOLAR_AUTO and pv_tmr is not None:
+            est_solar = pv_tmr   # 用 T-REC 實測校正的 PV 預估（09–16 平均）
+        elif inp.solar_mode == SOLAR_AUTO:
             est_solar = SOLAR_MAX_KW * min(1.0, w.get("tmr_rad", 400) / 1000.0) * avg_cp
         else:
             est_solar = inp.manual_solar
@@ -272,6 +354,12 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
     else:
         extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - inp.active_mag_limit) * 4.0
     extra_ice_rthr_for_cooling += event_ice_rthr
+    # 早上半尖峰的降載備援：最壞情況逼近上限時，多留一份冰給即時控制用（磁浮降載 75 kW × 2 小時）
+    semi = risk.get("semi")
+    reserve_rthr = 0.0
+    if semi and not tmr_is_holiday and semi["margin"] < RISK_TRIGGER_MARGIN:
+        reserve_rthr = SHED_KW / MAG_EFF * SHED_HOURS
+    extra_ice_rthr_for_cooling += reserve_rthr
 
     is_pure_holiday = tmr_is_holiday and event_ice_rthr == 0.0
     is_holiday_event = tmr_is_holiday and event_ice_rthr > 0.0
@@ -295,6 +383,8 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
         time_color = "#D2691E"
         if tmr_has_peak:
             melt_start, melt_end, melt_memo = "16:00", AC_END, f"*尖峰 16:00 起磁浮全關，融冰全量供冷至 {AC_END} 空調結束。"
+            if reserve_rthr:
+                melt_memo += f"另留約 {reserve_rthr:.0f} RT-HR 給早上即時降載。"
         else:
             melt_start, melt_end, melt_memo = "10:00", "16:00", "*依 IB-1 設計 13°C 進水條件執行。"
 
@@ -313,7 +403,36 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
         "tmr_true_base_load": base_load, "tmr_actual_load_growth": actual_load, "tmr_shaved_kw": calc_tmr[worst_hour]["h_shaved"] if worst_hour in calc_tmr else shaved_kw,
         "tmr_has_peak": tmr_has_peak,
         "is_pure_holiday": is_pure_holiday, "is_holiday_event": is_holiday_event,
-        "suggested_ice_hrs": suggested_ice_hrs,
+        "suggested_ice_hrs": suggested_ice_hrs, "reserve_rthr": reserve_rthr,
+        "model_used": model_used, "model_info": _model_info(model) if model_used else None, "risk": risk,
+        "mag_plan": _mag_plan(risk, tmr_has_peak, tmr_is_holiday),
         "start_time_str": start_time_str, "end_time_str": end_time_str, "time_color": time_color,
         "melt_start": melt_start, "melt_end": melt_end, "melt_memo": melt_memo,
     }
+
+
+def _model_info(model):
+    m = model.get("metrics", {}).get("work", {})
+    return {"trained_through": model.get("trained_through"), "mae_work": m.get("mae"),
+            "eval_days": m.get("days"), "summer_only": model.get("summer_only", False)}
+
+
+def _mag_plan(risk, tmr_has_peak, tmr_is_holiday):
+    """磁浮與即時需量控制建議（文字）。"""
+    if tmr_is_holiday:
+        return []
+    plan = []
+    semi = risk.get("semi")
+    if semi:
+        if semi["margin"] < 20:
+            plan.append(f"10:00–12:00 預先將磁浮上限降至 50%，由融冰補足（明日最壞情況 {semi['p95']:.0f} kW，"
+                        f"距 {semi['limit']:.0f} kW 僅 {semi['margin']:.0f} kW）")
+        plan.append(f"{semi['hours']} 15 分鐘平均超過 {semi['action']:.0f} kW：磁浮降至 50%、開融冰；"
+                    f"低於 {semi['release']:.0f} kW 持續 15 分鐘再恢復（{semi['alert']:.0f} kW 為 call 報 90% 預警）")
+    peak = risk.get("peak")
+    if tmr_has_peak:
+        line = "15:50 磁浮全關，融冰供冷至 18:00"
+        if peak:
+            line += f"；15 分鐘平均超過 {peak['action']:.0f} kW 時調降 AHU 風量"
+        plan.append(line)
+    return plan

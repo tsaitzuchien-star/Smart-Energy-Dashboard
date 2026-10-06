@@ -89,6 +89,8 @@ html, body, [class*="css"], .stApp { font-family: 'Noto Sans TC', sans-serif; }
 .bar { width:58%; max-width:64px; border-radius:6px 6px 0 0; padding-top:6px; box-sizing:border-box; text-align:center; font-family:'Manrope',sans-serif; font-size:13px; font-weight:700; }
 .lim { position:absolute; left:0; right:0; border-top:2px dashed #B3261E; }
 .xlab { display:flex; margin-top:6px; }
+.chart.dense .bar { width:80%; font-size:11px; padding-top:4px; }
+.xlab.dense div { font-size:11px; }
 .xlab div { flex:1; text-align:center; font-family:'Manrope',sans-serif; font-size:12px; color:#5B6875; }
 .xlab span { display:block; font-family:'Noto Sans TC',sans-serif; font-size:11px; color:#8F1D17; font-weight:700; }
 .part { margin-bottom:12px; }
@@ -407,10 +409,34 @@ with tab_tonight:
                     ("日間融冰", f"{melt_start} → {melt_end}", melt_memo.lstrip("*")),
                     ("磁浮主機（人工設定）",
                      "08:00 上限 70%　15:50 全關（融冰供冷）" if fc["tmr_has_peak"] else "08:00 上限 70%　15:50 降載 50%",
-                     "BMS 連動前，請併入廠務每日巡檢"),
+                     "；".join(fc["mag_plan"]) if fc["mag_plan"] else "BMS 連動前，請併入廠務每日巡檢"),
                 ]
             for i, (name, val, memo) in enumerate(items):
                 st.checkbox(f"**{name}**　{val}  \n{memo}", key=f"chk_{i}_{tmr_str}")
+
+    # --- 明日最壞情況（實測校正模型）---
+    if fc["risk"] and not is_holiday_mode:
+        names = {"semi": "白天半尖峰", "peak": "尖峰空調時段"}
+        cells = ""
+        for blk, r in fc["risk"].items():
+            col = "#B3261E" if r["margin"] < 0 else ("#7A4F00" if r["margin"] < 30 else "#0F5C41")
+            cells += (f'<div class="tile"><div class="k">{names[blk]} {r["hours"]}（上限 {r["limit"]:.0f}）</div>'
+                      f'<div class="v">{r["pred"]:.0f}<span class="u"> kW 預估</span></div>'
+                      f'<div style="font-size:13px;color:{col};">最壞情況（95%）{r["p95"]:.0f} kW，距上限 {r["margin"]:.0f} kW</div>'
+                      f'<div style="font-size:13px;color:#5B6875;">即時門檻：{r["alert"]:.0f} call 報（90%）／{r["action"]:.0f} 降磁浮／{r["release"]:.0f} 恢復</div></div>')
+        mi = fc["model_info"] or {}
+        note = (f"實測校正模型（資料至 {mi.get('trained_through')}，近 {mi.get('eval_days')} 個上班日逐時誤差約 {mi.get('mae_work')} kW）。"
+                "最壞情況＝預估最高＋過去 95% 的日子不會超過的突波量；突波來自冰機加載等瞬間變化，天氣預報抓不到，"
+                "所以收到 call 報後要在 15 分鐘平均超過降載門檻前，從中央監控調降磁浮。")
+        if mi.get("summer_only") and not fc["is_summer_tmr"]:
+            note += "　⚠️ 模型目前只看過夏月資料，非夏月前幾週誤差可能較大，等 10 月實測進來會自動修正。"
+        st.markdown(html(f"""
+        <div class="card" style="margin-top:16px;">
+          <h3>明日最壞情況與即時降載門檻</h3>
+          <div class="note" style="margin-bottom:10px;">{note}</div>
+          <div class="tiles">{cells}</div>
+        </div>
+        """), unsafe_allow_html=True)
 
     # --- 逐時圖 + 組成 ---
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
@@ -438,8 +464,9 @@ with tab_tonight:
                 fill, txt = "#1A7F5A", "#FFFFFF"
             cols.append(f'<div class="col{" peak" if peak else ""}"><div class="lim" style="bottom:{lim / top * H:.0f}px"></div>'
                         f'<div class="bar" style="height:{max(v, 0) / top * H:.0f}px;background:{fill};color:{txt};">{v:.0f}</div></div>')
-            labs.append(f'<div>{h}{"<span>夜尖峰</span>" if peak else ""}</div>')
-        return f'<div class="chart">{"".join(cols)}</div><div class="xlab">{"".join(labs)}</div>'
+            labs.append(f'<div>{h[:2] if len(calc) > 8 else h}{"<span>尖峰</span>" if peak else ""}</div>')
+        dense = " dense" if len(calc) > 8 else ""
+        return f'<div class="chart{dense}">{"".join(cols)}</div><div class="xlab{dense}">{"".join(labs)}</div>'
 
     with chart_col:
         calc_view = calc_tmr if is_tmr_view else calc_today
@@ -448,7 +475,7 @@ with tab_tonight:
             st.markdown(html(f"""
             <div class="card">
               <h3>{"明日" if is_tmr_view else "今日"}逐時需量預測</h3>
-              <div class="note">{date_view} · 單位 kW · 扣除太陽能後的台電需量</div>
+              <div class="note">{date_view} · 單位 kW · 扣除太陽能後的台電需量{"（每小時最大 15 分鐘需量，實測校正）" if fc["model_used"] else ""}</div>
               <div class="legend">
                 <span><i style="background:#1A7F5A"></i>餘裕充足</span>
                 <span><i style="background:#F2B632"></i>逼近警戒</span>
@@ -479,6 +506,9 @@ with tab_tonight:
                  else f"磁浮 {int(inp.emergency_mag_limit_pct)}% 封印降載", -tmr_shaved_kw, "#1A7F5A"),
                 (f"太陽能（{worst_hour}）", -worst_hour_solar, "#1A7F5A"),
             ]
+            phys = calc_tmr.get(worst_hour, {}).get("h_net_phys")
+            if phys is not None:
+                parts.append(("實測校正（模型與實測的差）", max_net_grid_demand - phys, "#6B4FA0"))
             total = max_net_grid_demand
             title = f"最危險時段 {worst_hour}"
             sub = "這個需量是怎麼組成的（kW）"
@@ -570,9 +600,9 @@ with tab_tonight:
     # --- 預測準確度（紀錄累積進度）---
     @st.cache_data(ttl=3600)
     def count_log_days():
-        """讀 auto_log 寫入的 Google Sheet，回傳 v2 資料列數；未設定憑證或失敗回傳 None。"""
+        """讀 auto_log 寫入的 Google Sheet，回傳 v2／v3 實算資料列數；未設定憑證或失敗回傳 None。"""
         try:
-            return sum(1 for v in open_book().sheet1.col_values(15)[1:] if str(v).startswith("v2"))
+            return sum(1 for v in open_book().sheet1.col_values(15)[1:] if str(v).startswith(("v2", "v3")))
         except Exception:
             return None
 

@@ -19,7 +19,7 @@ from weather import LAT, LON, TW_TZ, apply_open_meteo
 
 log = logging.getLogger("backcast")
 
-HOURLY_VARS = "temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation"
+HOURLY_VARS = "temperature_2m,relative_humidity_2m,precipitation,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation"
 MODELS = ["ecmwf_ifs", "ecmwf_ifs025", "best_match"]   # 依序嘗試，記錄實際使用的模型
 HEADERS = ["預測日期", "時間", "台電時段", "契約上限(kW)", "預測需量(kW)", "當日預測最高(kW)", "當日最危險時段", "氣象模型"]
 

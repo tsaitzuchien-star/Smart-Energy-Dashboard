@@ -48,7 +48,7 @@ def parse_actual(rows):
 
 
 def parse_forecast_log(rows):
-    """主工作表 → {預測日期: 明日預估最高需量}；只取 v2 實算列，同一天多筆取最後一筆。"""
+    """主工作表 → {預測日期: 明日預估最高需量}；只取 v2／v3 實算列，同一天多筆取最後一筆。"""
     if not rows:
         return {}
     head = rows[0]
@@ -58,7 +58,7 @@ def parse_forecast_log(rows):
         return {}
     out = {}
     for r in rows[1:]:
-        if len(r) <= max(i_t, i_v, i_ver) or not str(r[i_ver]).startswith("v2"):
+        if len(r) <= max(i_t, i_v, i_ver) or not str(r[i_ver]).startswith(("v2", "v3")):
             continue
         d, v = _date(r[i_t]), _num(r[i_v])
         if d and v is not None:

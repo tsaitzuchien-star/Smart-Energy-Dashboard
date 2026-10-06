@@ -17,7 +17,12 @@ from weather import TW_TZ, fetch_smart_weather
 
 log = logging.getLogger("auto_log")
 
-DATA_VERSION = "v2-實算預測"
+DATA_VERSION = "v2-實算預測"          # 物理模型
+DATA_VERSION_CAL = "v3-實測校正"      # 實測校正模型（model/demand_model.json）
+
+
+def data_version(fc):
+    return DATA_VERSION_CAL if fc.get("model_used") else DATA_VERSION
 HEADERS = [
     "紀錄時間", "假設進駐率(%)", "今日最高氣溫(°C)", "今日最高輻射(W/m²)",
     "今日最危險時段", "今日最高需量(kW)", "明日預估高溫(°C)",
@@ -65,7 +70,7 @@ def build_row(now, w, cal, inp=None):
         fc["today_worst_hour"], round(fc["today_max_net"], 1), round(w["tmr_temp"], 1),
         round(solar_peak, 1), fc["worst_hour"], round(fc["max_net_grid_demand"], 1),
         round(fc["suggested_ice_hrs"], 1),
-        w["source"], "是" if tmr_hol else "否", fc["season_tag"], DATA_VERSION,
+        w["source"], "是" if tmr_hol else "否", fc["season_tag"], data_version(fc),
     ]
 
 
@@ -79,7 +84,7 @@ def build_compare_rows(now, w, cal, inp=None):
     day = tmr.strftime("%Y-%m-%d")
     return [
         [day, h, WEEKDAYS[tmr.weekday()], d["period"], d["current_limit"], round(d["h_net"], 1), ACTUAL_LOOKUP,
-         ERR_KW, ERR_PCT, w["fetch_time"], DATA_VERSION]
+         ERR_KW, ERR_PCT, w["fetch_time"], data_version(fc)]
         for h, d in fc["calc_tmr"].items()
     ]
 
