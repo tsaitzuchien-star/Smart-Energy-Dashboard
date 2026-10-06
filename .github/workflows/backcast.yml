@@ -1,0 +1,49 @@
+name: 回測：用歷史氣象重算過去預測
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: 起始預測日（YYYY-MM-DD）
+        default: '2026-06-08'
+      end:
+        description: 結束預測日（YYYY-MM-DD）
+        default: '2026-09-30'
+  push:
+    branches: [claude/backcast]
+    paths: [backcast.py, .github/workflows/backcast.yml]
+
+jobs:
+  backcast:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install requests urllib3
+      - name: 重算預測
+        env:
+          START: ${{ inputs.start || '2026-06-08' }}
+          END: ${{ inputs.end || '2026-09-30' }}
+        run: python backcast.py "$START" "$END" backcast.csv
+      - name: 結果推到 claude/backcast-results 分支（不進主程式）
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mv backcast.csv /tmp/backcast.csv
+          git checkout --orphan backcast-results
+          git rm -rfq .
+          cp /tmp/backcast.csv backcast.csv
+          git add backcast.csv
+          git commit -qm "回測結果 $START → $END"
+          git push -f origin HEAD:claude/backcast-results
+        env:
+          START: ${{ inputs.start || '2026-06-08' }}
+          END: ${{ inputs.end || '2026-09-30' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backcast
+          path: /tmp/backcast.csv

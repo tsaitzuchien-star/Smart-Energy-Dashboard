@@ -35,6 +35,39 @@ def translate_wx(wx_en):
     return wx_en.capitalize()
 
 
+def apply_open_meteo(res, r, now, target_hours=TARGET_HOURS):
+    """把 Open-Meteo 回應（含 current 與 hourly）填進氣象 dict；回測腳本也用這個，確保解析方式與線上一致。"""
+    today_prefix = now.strftime("%Y-%m-%d")
+    tmr_prefix = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+    res["source"] = "ECMWF"
+    res["status_code"] = 1
+    res["wx"] = wmo_to_text(r['current']['weather_code'])
+    res["cloud"] = r['current']['cloud_cover']
+    res["cloud_low"] = r['current']['cloud_cover_low']
+    res["cloud_mid"] = r['current']['cloud_cover_mid']
+    res["cloud_high"] = r['current']['cloud_cover_high']
+    res["rad"] = r['current']['shortwave_radiation']
+    res["temp"] = r['current']['temperature_2m']
+    times_list = r['hourly']['time']
+    for i, t in enumerate(times_list):
+        if t.startswith(today_prefix): res["all_temps_today"][t.split("T")[1]] = r['hourly']['temperature_2m'][i]
+        elif t.startswith(tmr_prefix): res["all_temps_tmr"][t.split("T")[1]] = r['hourly']['temperature_2m'][i]
+    for hour in target_hours:
+        t_td = f"{today_prefix}T{hour}"
+        if t_td in times_list:
+            idx = times_list.index(t_td)
+            res["today_hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "c_low": r['hourly']['cloud_cover_low'][idx], "c_mid": r['hourly']['cloud_cover_mid'][idx], "c_high": r['hourly']['cloud_cover_high'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
+        t_tm = f"{tmr_prefix}T{hour}"
+        if t_tm in times_list:
+            idx = times_list.index(t_tm)
+            res["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "c_low": r['hourly']['cloud_cover_low'][idx], "c_mid": r['hourly']['cloud_cover_mid'][idx], "c_high": r['hourly']['cloud_cover_high'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
+    try: res["tmr_temp"] = max([r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)])
+    except: res["tmr_temp"] = res["hourly"].get("12:00", {}).get("temp", 28.0)
+    try: res["tmr_rad"] = int(sum([r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]) / len(range(8, 17, 2)))
+    except: res["tmr_rad"] = res["rad"]
+    return res
+
+
 def fetch_smart_weather(vc_key=None, now=None, session=None):
     """回傳氣象 dict。status_code: 1=ECMWF, 2=VC 備援, 0=全部斷線(盲估)。"""
     now = now or datetime.now(TW_TZ)
@@ -62,33 +95,7 @@ def fetch_smart_weather(vc_key=None, now=None, session=None):
         om_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&hourly=temperature_2m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,weather_code,shortwave_radiation&timezone=Asia%2FTaipei&models=ecmwf_ifs"
         r_om = session.get(om_url, timeout=5)
         if r_om.status_code == 200:
-            r = r_om.json()
-            res["source"] = "ECMWF"
-            res["status_code"] = 1
-            res["wx"] = wmo_to_text(r['current']['weather_code'])
-            res["cloud"] = r['current']['cloud_cover']
-            res["cloud_low"] = r['current']['cloud_cover_low']
-            res["cloud_mid"] = r['current']['cloud_cover_mid']
-            res["cloud_high"] = r['current']['cloud_cover_high']
-            res["rad"] = r['current']['shortwave_radiation']
-            res["temp"] = r['current']['temperature_2m']
-            times_list = r['hourly']['time']
-            for i, t in enumerate(times_list):
-                if t.startswith(today_prefix): res["all_temps_today"][t.split("T")[1]] = r['hourly']['temperature_2m'][i]
-                elif t.startswith(tmr_prefix): res["all_temps_tmr"][t.split("T")[1]] = r['hourly']['temperature_2m'][i]
-            for hour in target_hours:
-                t_td = f"{today_prefix}T{hour}"
-                if t_td in times_list:
-                    idx = times_list.index(t_td)
-                    res["today_hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "c_low": r['hourly']['cloud_cover_low'][idx], "c_mid": r['hourly']['cloud_cover_mid'][idx], "c_high": r['hourly']['cloud_cover_high'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
-                t_tm = f"{tmr_prefix}T{hour}"
-                if t_tm in times_list:
-                    idx = times_list.index(t_tm)
-                    res["hourly"][hour] = {"temp": r['hourly']['temperature_2m'][idx], "rad": r['hourly']['shortwave_radiation'][idx], "c_low": r['hourly']['cloud_cover_low'][idx], "c_mid": r['hourly']['cloud_cover_mid'][idx], "c_high": r['hourly']['cloud_cover_high'][idx], "wx": wmo_to_text(r['hourly']['weather_code'][idx])}
-            try: res["tmr_temp"] = max([r['hourly']['temperature_2m'][times_list.index(f"{tmr_prefix}T{h}:00")] for h in range(12, 16)])
-            except: res["tmr_temp"] = res["hourly"].get("12:00", {}).get("temp", 28.0)
-            try: res["tmr_rad"] = int(sum([r['hourly']['shortwave_radiation'][times_list.index(f"{tmr_prefix}T{h:02d}:00")] for h in range(8, 17, 2)]) / len(range(8, 17, 2)))
-            except: res["tmr_rad"] = res["rad"]
+            apply_open_meteo(res, r_om.json(), now, target_hours)
             ecmwf_parsed = True
     except Exception as e: log.warning("ECMWF 抓取失敗: %s", e)
 
