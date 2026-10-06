@@ -149,5 +149,27 @@ class CalibratedForecastTests(unittest.TestCase):
         self.assertEqual(fc["risk"], {})
 
 
+class RewarmTests(unittest.TestCase):
+    def test_off_days_before(self):
+        hol = lambda d: d.weekday() >= 5 or d == date(2026, 10, 9)   # 週五 10/9 補假
+        self.assertEqual(forecast.off_days_before(date(2026, 10, 12), hol), 3)   # 週一，前面五六日
+        self.assertEqual(forecast.off_days_before(date(2026, 10, 6), hol), 0)    # 週二
+
+    def test_return_from_weekend_stores_more_ice(self):
+        now = datetime(2026, 9, 27, 18, 0, tzinfo=TZ)   # 週日晚上，明天週一
+        w = fake_weather(now)
+        base = compute_forecast(w, ForecastInputs(), now, True, False, model=None)
+        back = compute_forecast(w, ForecastInputs(), now, True, False, model=None, prev_off_days=2)
+        self.assertEqual(base["rewarm_rthr"], 0.0)
+        self.assertAlmostEqual(back["suggested_ice_hrs"] - base["suggested_ice_hrs"], back["rewarm_hrs"], places=6)
+        self.assertAlmostEqual(back["rewarm_hrs"], 2 * forecast.REWARM_RTHR_PER_DAY * 1.2 / forecast.ICE_CHILLER_CAP_RT)
+        self.assertLess(back["start_time_str"], base["start_time_str"])
+
+    def test_no_rewarm_when_tomorrow_is_off(self):
+        now = datetime(2026, 9, 25, 18, 0, tzinfo=TZ)
+        fc = compute_forecast(fake_weather(now), ForecastInputs(), now, False, True, model=None, prev_off_days=3)
+        self.assertEqual(fc["rewarm_rthr"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

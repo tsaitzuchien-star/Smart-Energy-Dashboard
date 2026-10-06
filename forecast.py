@@ -29,6 +29,9 @@ DL_RELEASE_MARGIN = 66.0   # 解除：連續 15 分鐘低於此值才恢復
 SHED_KW = 75.0             # 實測磁浮全關可降的需量（夏月 15:30→16:15 平均 73.8 kW）
 SHED_HOURS = 2.0           # 早上保留可應付 2 小時降載的冰量
 RISK_TRIGGER_MARGIN = 60.0 # 明日最壞情況（P95）距上限小於此值時，預留降載冰量
+# 收假前一晚：週末／連假期間儲冰槽回溫，要多儲才能把槽溫拉回來。
+# 6–9 月實測：平常晚上儲冰中位數 3.5 小時，週末後（休 2 天）的週日晚上 4.25 小時、平均多約 1 小時。
+REWARM_RTHR_PER_DAY = 100.0   # 每休 1 天多儲的冰量（×1.2 安全係數 ÷ 242.5 RT ≈ 製冰主機 0.5 小時）
 
 SOLAR_AUTO = "🤖 API 短波輻射精準推算"
 SOLAR_MANUAL = "✋ 廠務手動強制設定"
@@ -258,10 +261,19 @@ def _risk_blocks(model, dt, adj, day):
     return out
 
 
-def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="auto"):
+def off_days_before(day, is_holiday, max_days=14):
+    """day 之前連續幾天是非上班日（例：週一 → 2；連假後第一天 → 連假天數）。"""
+    n = 0
+    while n < max_days and is_holiday(day - timedelta(days=n + 1)):
+        n += 1
+    return n
+
+
+def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="auto", prev_off_days=0):
     """主運算。w＝weather.fetch_smart_weather() 的結果；回傳所有 UI／紀錄需要的數值。
 
     model：實測校正模型（demand_model）；"auto" 讀 model/demand_model.json，None 則只用原本的物理模型。
+    prev_off_days：明天之前連續休幾天（off_days_before），明天上班時用來加長收假前一晚的儲冰。
     """
     if model == "auto":
         model = _default_model()
@@ -360,6 +372,8 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
     if semi and not tmr_is_holiday and semi["margin"] < RISK_TRIGGER_MARGIN:
         reserve_rthr = SHED_KW / MAG_EFF * SHED_HOURS
     extra_ice_rthr_for_cooling += reserve_rthr
+    rewarm_rthr = REWARM_RTHR_PER_DAY * prev_off_days if not tmr_is_holiday else 0.0
+    extra_ice_rthr_for_cooling += rewarm_rthr
 
     is_pure_holiday = tmr_is_holiday and event_ice_rthr == 0.0
     is_holiday_event = tmr_is_holiday and event_ice_rthr > 0.0
@@ -404,6 +418,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
         "tmr_has_peak": tmr_has_peak,
         "is_pure_holiday": is_pure_holiday, "is_holiday_event": is_holiday_event,
         "suggested_ice_hrs": suggested_ice_hrs, "reserve_rthr": reserve_rthr,
+        "rewarm_rthr": rewarm_rthr, "rewarm_hrs": rewarm_rthr * 1.2 / ICE_CHILLER_CAP_RT, "prev_off_days": prev_off_days if not tmr_is_holiday else 0,
         "model_used": model_used, "model_info": _model_info(model) if model_used else None, "risk": risk,
         "mag_plan": _mag_plan(risk, tmr_has_peak, tmr_is_holiday),
         "start_time_str": start_time_str, "end_time_str": end_time_str, "time_color": time_color,
