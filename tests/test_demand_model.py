@@ -96,6 +96,7 @@ class CalibratedForecastTests(unittest.TestCase):
         semi = fc["risk"]["semi"]
         self.assertEqual(semi["limit"], 516.0)
         self.assertEqual(semi["action"], 516.0 - forecast.DL_ACTION_MARGIN)
+        self.assertAlmostEqual(semi["alert"], 516.0 * 0.9)
         self.assertAlmostEqual(semi["p95"] - semi["pred"], 50.0)
 
     def test_sidebar_adjustments_stack_on_model(self):

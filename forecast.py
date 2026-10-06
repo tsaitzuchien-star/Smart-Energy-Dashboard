@@ -22,8 +22,8 @@ MAG_EFF = 0.7
 MAG_PEAK_OFF_KW = MAG_CHILLER_RT * MAG_EFF   # 尖峰時段磁浮全關，冷房全由融冰供應
 SOLAR_MAX_KW = 145.0
 
-# --- 即時需量控制（建議 BMS 依 15 分鐘平均執行，數值＝該時段契約上限減去以下餘裕）---
-DL_ALERT_MARGIN = 46.0     # 預警：通知值班
+# --- 即時需量控制（值班依中央監控手動調磁浮 0–100%；數值＝該時段契約上限減去以下餘裕）---
+DL_ALERT_RATIO = 0.90      # 預警：與現場 call 報系統一致，契約 90% 時通知同仁
 DL_ACTION_MARGIN = 36.0    # 動作：磁浮降至 50%（尖峰時磁浮已關則降 AHU），融冰補足
 DL_RELEASE_MARGIN = 66.0   # 解除：連續 15 分鐘低於此值才恢復
 SHED_KW = 75.0             # 實測磁浮全關可降的需量（夏月 15:30→16:15 平均 73.8 kW）
@@ -253,7 +253,7 @@ def _risk_blocks(model, dt, adj, day):
         hrs = [h for h in demand_model.BLOCKS[blk] if h in adj]
         limit = min(contract_limit_at(day, h) for h in hrs)
         out[blk] = {"hours": f"{hrs[0]:02d}:00–{hrs[-1] + 1:02d}:00", "pred": lo, "p95": hi, "limit": limit,
-                    "margin": limit - hi, "action": limit - DL_ACTION_MARGIN, "alert": limit - DL_ALERT_MARGIN,
+                    "margin": limit - hi, "action": limit - DL_ACTION_MARGIN, "alert": limit * DL_ALERT_RATIO,
                     "release": limit - DL_RELEASE_MARGIN, "period": tou_period(day, hrs[0])}
     return out
 
@@ -425,7 +425,7 @@ def _mag_plan(risk, tmr_has_peak, tmr_is_holiday):
             plan.append(f"10:00–12:00 預先將磁浮上限降至 50%，由融冰補足（明日最壞情況 {semi['p95']:.0f} kW，"
                         f"距 {semi['limit']:.0f} kW 僅 {semi['margin']:.0f} kW）")
         plan.append(f"{semi['hours']} 15 分鐘平均超過 {semi['action']:.0f} kW：磁浮降至 50%、開融冰；"
-                    f"低於 {semi['release']:.0f} kW 持續 15 分鐘再恢復（{semi['alert']:.0f} kW 先通知值班）")
+                    f"低於 {semi['release']:.0f} kW 持續 15 分鐘再恢復（{semi['alert']:.0f} kW 為 call 報 90% 預警）")
     peak = risk.get("peak")
     if tmr_has_peak:
         line = "15:50 磁浮全關，融冰供冷至 18:00"

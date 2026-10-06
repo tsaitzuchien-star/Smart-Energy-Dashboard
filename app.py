@@ -423,11 +423,11 @@ with tab_tonight:
             cells += (f'<div class="tile"><div class="k">{names[blk]} {r["hours"]}（上限 {r["limit"]:.0f}）</div>'
                       f'<div class="v">{r["pred"]:.0f}<span class="u"> kW 預估</span></div>'
                       f'<div style="font-size:13px;color:{col};">最壞情況（95%）{r["p95"]:.0f} kW，距上限 {r["margin"]:.0f} kW</div>'
-                      f'<div style="font-size:13px;color:#5B6875;">即時門檻：{r["alert"]:.0f} 預警／{r["action"]:.0f} 降載／{r["release"]:.0f} 解除</div></div>')
+                      f'<div style="font-size:13px;color:#5B6875;">即時門檻：{r["alert"]:.0f} call 報（90%）／{r["action"]:.0f} 降磁浮／{r["release"]:.0f} 恢復</div></div>')
         mi = fc["model_info"] or {}
         note = (f"實測校正模型（資料至 {mi.get('trained_through')}，近 {mi.get('eval_days')} 個上班日逐時誤差約 {mi.get('mae_work')} kW）。"
                 "最壞情況＝預估最高＋過去 95% 的日子不會超過的突波量；突波來自冰機加載等瞬間變化，天氣預報抓不到，"
-                "所以要靠即時門檻在 15 分鐘內降載。")
+                "所以收到 call 報後要在 15 分鐘平均超過降載門檻前，從中央監控調降磁浮。")
         if mi.get("summer_only") and not fc["is_summer_tmr"]:
             note += "　⚠️ 模型目前只看過夏月資料，非夏月前幾週誤差可能較大，等 10 月實測進來會自動修正。"
         st.markdown(html(f"""
