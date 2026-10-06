@@ -365,9 +365,9 @@ with tab_tonight:
     is_tmr_view = view == "明日預測"
     chart_col, part_col = st.columns([2.3, 1])
 
-    def bars_html(calc, is_summer):
+    def bars_html(calc):
         vals = [calc[h]["h_net"] for h in TARGET_HOURS if h in calc]
-        top = max([550.0, 516.0] + vals) * 1.05
+        top = max([550.0] + [calc[h]["current_limit"] for h in calc] + vals) * 1.05
         H = 260.0
         cols, labs = [], []
         for h in TARGET_HOURS:
@@ -376,7 +376,7 @@ with tab_tonight:
             d = calc[h]
             v, lim = d["h_net"], d["current_limit"]
             hour = int(h[:2])
-            peak = is_summer and 16 <= hour < 22
+            peak = d["period"] == "尖峰"
             if v > lim - 15:
                 fill, txt = "#B3261E", "#FFFFFF"
             elif v > lim - 50:
@@ -400,9 +400,9 @@ with tab_tonight:
                 <span><i style="background:#1A7F5A"></i>餘裕充足</span>
                 <span><i style="background:#F2B632"></i>逼近警戒</span>
                 <span><i style="background:#B3261E"></i>超約風險</span>
-                <span><i class="dash"></i>契約警戒線（日間 516 kW；夏月 16:00–22:00 為 452 kW）</span>
+                <span><i class="dash"></i>契約警戒線（尖峰 452／半尖峰 516／週六半尖峰及離峰 616 kW）</span>
               </div>
-              {bars_html(calc_view, is_summer_tmr if is_tmr_view else is_summer_today)}
+              {bars_html(calc_view)}
             </div>
             """), unsafe_allow_html=True)
         else:
@@ -563,7 +563,7 @@ with tab_detail:
                 "時間": h, "天氣": d["wx"], "氣溫 °C": d["temp"], "輻射 W/m²": d["rad"], "雲量 低/中/高 %": clouds,
                 "雲層衰減": f'-{int((1 - d["cp"]) * 100)}%' if d["cp"] < 1.0 else "無",
                 "總負載 kW": round(d["h_load"], 1), "太陽能 kW": round(d["h_solar"], 1),
-                "台電需量 kW": round(d["h_net"], 1), "警戒線 kW": d["current_limit"],
+                "台電需量 kW": round(d["h_net"], 1), "時段": d["period"], "警戒線 kW": d["current_limit"],
             })
         return pd.DataFrame(rows)
 
@@ -583,7 +583,7 @@ with tab_help:
     st.markdown(f"""
 **怎麼用**：每天下午先確認「明日條件」（會議廳、展演大廳、進駐率、加班），再照「今晚任務」把三項設定輸入 BMS 並勾選。
 
-**季別**：明日為 **{season_tag}**，契約警戒線 {fc['contract_limit']:.0f} kW；夏月（5/16–10/15）16:00–22:00 為 452 kW，其餘 516 kW。
+**季別與契約**：明日為 **{season_tag}**，當日最嚴格的契約警戒線 {fc['contract_limit']:.0f} kW。警戒線依台電高壓三段式時段切換：尖峰 452 kW（僅夏月 5/16–10/15 週一～五 16:00–22:00）、半尖峰 516 kW、週六半尖峰及離峰 616 kW；週日全日離峰。平日國定假日仍以平日時段計（保守）。
 
 **假日判斷**：依政府行事曆（含補班日），每天更新；抓不到時頁面上方會出現警告，並暫以週末判斷。臨時變更（颱風假等）可寫在 `data/calendar_overrides.json`。
 

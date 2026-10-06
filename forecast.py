@@ -22,6 +22,11 @@ SOLAR_MANUAL = "✋ 廠務手動強制設定"
 AHU_AUTO = "🤖 溫控動態演算 (Auto)"
 OVERTIME_ONTIME = "🌇 18:00 準時下班 (啟動夜間降載)"
 
+# --- 台電契約容量（高壓三段式時間電價，112 年新制）---
+CONTRACT_PEAK_KW = 452.0       # 尖峰：夏月週一～五 16:00–22:00
+CONTRACT_SEMI_PEAK_KW = 516.0  # 半尖峰
+CONTRACT_OFF_PEAK_KW = 616.0   # 週六半尖峰及離峰
+
 # 歷史各月最高需量 (kW)
 HISTORICAL_MAX_DEMAND = {1: 274, 2: 262, 3: 286, 4: 366, 5: 362, 6: 502, 7: 510, 8: 504, 9: 468, 10: 460, 11: 500, 12: 394}
 
@@ -35,6 +40,40 @@ def is_summer_day(d):
     if d.month == 10 and d.day <= 15:
         return True
     return False
+
+
+def tou_period(d, hour):
+    """台電高壓三段式時段。d＝日期，hour＝0–23。
+
+    週六、週日依星期判斷；平日國定假日仍以平日時段計（台電離峰日清單與行事曆不完全相同，取保守值）。
+    """
+    wd = d.weekday()
+    if wd == 6:
+        return "離峰"
+    if is_summer_day(d):
+        if wd == 5:
+            return "週六半尖峰" if hour >= 9 else "離峰"
+        if 16 <= hour < 22:
+            return "尖峰"
+        return "半尖峰" if hour >= 9 else "離峰"
+    in_day = 6 <= hour < 11 or hour >= 14
+    if wd == 5:
+        return "週六半尖峰" if in_day else "離峰"
+    return "半尖峰" if in_day else "離峰"
+
+
+_PERIOD_LIMIT = {"尖峰": CONTRACT_PEAK_KW, "半尖峰": CONTRACT_SEMI_PEAK_KW,
+                 "週六半尖峰": CONTRACT_OFF_PEAK_KW, "離峰": CONTRACT_OFF_PEAK_KW}
+
+
+def contract_limit_at(d, hour):
+    """該日該小時的契約上限 (kW)。"""
+    return _PERIOD_LIMIT[tou_period(d, hour)]
+
+
+def day_min_limit(d):
+    """該日最嚴格的契約上限 (kW)。"""
+    return min(contract_limit_at(d, h) for h in range(24))
 
 
 def get_cloud_penalty(status_code, c_low, c_mid):
@@ -87,7 +126,7 @@ class ForecastInputs:
         return self.emergency_mag_limit_pct / 100.0
 
 
-def _hourly_loop(w, inp, *, is_tmr, is_holiday, is_summer, event_kw, base_load, actual_load, shaved_kw):
+def _hourly_loop(w, inp, *, is_tmr, day, is_holiday, event_kw, base_load, actual_load, shaved_kw):
     """逐時計算一天（今日或明日）。回傳 (calc, worst)；worst 為缺口最大的時段。"""
     hourly = w["hourly"] if is_tmr else w["today_hourly"]
     temps_key = "all_temps_tmr" if is_tmr else "all_temps_today"
@@ -141,12 +180,13 @@ def _hourly_loop(w, inp, *, is_tmr, is_holiday, is_summer, event_kw, base_load, 
             h_load = (160.0 + event_kw) if is_holiday else base_load + actual_load + dynamic_load - shaved_kw
 
         h_net = h_load - h_solar
-        limit = 452.0 if (is_summer and 16 <= hour_int < 22) else 516.0
+        period = tou_period(day, hour_int)
+        limit = _PERIOD_LIMIT[period]
         gap = h_net - limit
 
         calc[h] = {"temp": h_temp, "rad": h_rad, "wx": h_data["wx"], "c_low": c_low, "c_mid": c_mid,
                    "c_high": h_data.get("c_high", 0), "cp": cp, "h_solar": h_solar, "h_load": h_load,
-                   "h_net": h_net, "shading_factor": shading_factor, "current_limit": limit}
+                   "h_net": h_net, "shading_factor": shading_factor, "current_limit": limit, "period": period}
 
         if gap > max_gap:
             max_gap = gap
@@ -160,7 +200,8 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
     current_month = now_dt.month
     is_summer_today = is_summer_day(now_dt)
     is_summer_tmr = is_summer_day(tmr_dt)
-    contract_limit, season_tag = (452.0, "夏月(新制)") if is_summer_tmr else (516.0, "非夏月")
+    contract_limit = day_min_limit(tmr_dt)
+    season_tag = "夏月(新制)" if is_summer_tmr else "非夏月"
     base_load_historical = HISTORICAL_MAX_DEMAND.get(current_month, 400)
     api_is_online = w["status_code"] > 0
 
@@ -179,13 +220,13 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
     calc_today, calc_tmr = {}, {}
     today_max_net, today_worst_hour = 0.0, "未知"
     max_net_grid_demand, worst_hour, worst_hour_load, worst_hour_solar = 0.0, "未知", 0.0, 0.0
-    worst_limit_tmr = 516.0
+    worst_limit_tmr = contract_limit
 
     if api_is_online:
-        calc_today, wt = _hourly_loop(w, inp, is_tmr=False, is_holiday=today_is_holiday, is_summer=is_summer_today,
+        calc_today, wt = _hourly_loop(w, inp, is_tmr=False, day=now_dt.date(), is_holiday=today_is_holiday,
                                       event_kw=0.0, base_load=base_load, actual_load=actual_load, shaved_kw=shaved_kw)
         today_max_net, today_worst_hour = wt["net"], wt["hour"]
-        calc_tmr, wm = _hourly_loop(w, inp, is_tmr=True, is_holiday=tmr_is_holiday, is_summer=is_summer_tmr,
+        calc_tmr, wm = _hourly_loop(w, inp, is_tmr=True, day=tmr_dt.date(), is_holiday=tmr_is_holiday,
                                     event_kw=event_kw, base_load=base_load, actual_load=actual_load, shaved_kw=shaved_kw)
         max_net_grid_demand, worst_hour = wm["net"], wm["hour"]
         worst_hour_load, worst_hour_solar = wm["load"], wm["solar"]
@@ -195,7 +236,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
             est_solar = SOLAR_MAX_KW * min(1.0, w.get("tmr_rad", 400) / 1000.0) * avg_cp
         else:
             est_solar = inp.manual_solar
-        worst_limit_tmr = calc_tmr[worst_hour]["current_limit"] if worst_hour in calc_tmr else (452.0 if is_summer_tmr else 516.0)
+        worst_limit_tmr = calc_tmr[worst_hour]["current_limit"] if worst_hour in calc_tmr else contract_limit
     else:
         # 斷線盲估模式
         h_solar_blind = inp.manual_solar if inp.solar_mode == SOLAR_MANUAL else SOLAR_MAX_KW * 0.4
@@ -214,7 +255,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday):
         max_net_grid_demand, worst_hour = h_load_blind - h_solar_blind, "斷線盲估"
         worst_hour_load, worst_hour_solar = h_load_blind, h_solar_blind
         est_solar = h_solar_blind
-        worst_limit_tmr = 452.0 if is_summer_tmr else 516.0
+        worst_limit_tmr = contract_limit
 
     demand_gap = max_net_grid_demand - (worst_limit_tmr - 15.0)
     needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
