@@ -7,6 +7,10 @@
 係數由 calibrate.py 每週用最新實測重新擬合（近期資料權重較高，半衰期 21 天），存在 model/demand_model.json。
 另存各時段「實測最高 − 預測最高」的歷史分位數，用來估明日最壞情況（P90／P95）。
 
+太陽能（T-REC 四組 PV，自發自用、在總表後面）另擬合「明日 PV ≈ 小時基準 + 日射 + 雲量」，供畫面顯示。
+需量模型本身不另扣 PV：總表需量已是扣掉 PV 後的值，日射與雲量的效果已含在氣象斜率裡
+（6–9 月回測：拆成「真實用電 − PV」兩段預測並沒有比較準）。
+
 夏月平日 16:00 起磁浮全關（現場操作），這段負載會掉約 75 kW。擬合時先把這兩小時加回去（等於「磁浮照常運轉」），
 預測時再依明日是否尖峰扣掉；這樣到了非夏月（16 點後磁浮照常開）也不會沿用夏天的低值。
 """
@@ -19,6 +23,7 @@ FEATURE_NAMES = {"T": "氣溫", "RH": "濕度", "CC": "雲量", "R": "日射", "
 HOURS = list(range(7, 19))                    # 07:00–18:00，空調 07:30–18:00 加前後各一小時
 BLOCKS = {"semi": range(9, 16), "peak": range(16, 18)}   # 夏月平日：半尖峰日間 09–16、尖峰空調時段 16–18
 MAG_OFF_KW = 75.0     # 實測：夏月平日 15:30 與 16:15 兩個 15 分鐘平均的差，6–9 月平均 73.8 kW
+PV_MAX_KW = 145.0     # 四組 PV 合計裝置容量
 DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model", "demand_model.json")
 
 
@@ -84,6 +89,31 @@ def fit(rows, ref_date, halflife=21.0, alpha=3.0):
     return model
 
 
+def fit_pv(rows, ref_date, halflife=21.0):
+    """rows 中有 pv 欄位者：PV = c[小時] + bR × 日射/100 + bCC × 雲量/100（加權最小平方）。資料不足回傳 None。"""
+    sub = [r for r in rows if r.get("pv") is not None and r["hour"] in HOURS and r["date"] <= ref_date]
+    hours = sorted({r["hour"] for r in sub})
+    if len({r["date"] for r in sub}) < 14 or len(hours) < len(HOURS):
+        return None
+    n = len(hours) + 2
+    xtx = [[0.0] * n for _ in range(n)]
+    xty = [0.0] * n
+    for r in sub:
+        w = 0.5 ** ((ref_date - r["date"]).days / halflife)
+        x = [1.0 if r["hour"] == h else 0.0 for h in hours] + [r["R"] / 100.0, r["CC"] / 100.0]
+        for i in range(n):
+            if x[i] == 0.0:
+                continue
+            xty[i] += w * x[i] * r["pv"]
+            for j in range(n):
+                xtx[i][j] += w * x[i] * x[j]
+    for k in range(len(hours), n):
+        xtx[k][k] += 1e-6
+    b = _solve(xtx, xty)
+    return {"intercept": {str(h): round(b[i], 2) for i, h in enumerate(hours)},
+            "R": round(b[-2], 3), "CC": round(b[-1], 3), "n_days": len({r["date"] for r in sub})}
+
+
 # ---------------- 預測 ----------------
 
 def predict_hour(model, dt, hour, wx, mag_off=False):
@@ -107,6 +137,21 @@ def predict_day(model, dt, wx_by_hour, mag_off_hours=()):
         if p is not None:
             out[h] = p
     return out
+
+
+def predict_pv(model, hour, wx):
+    """明日該小時太陽能 kW；沒有 PV 模型或缺日射／雲量時回傳 None。"""
+    p = model.get("pv")
+    if not p or str(hour) not in p["intercept"] or wx.get("R") is None or wx.get("CC") is None:
+        return None
+    return min(PV_MAX_KW, max(0.0, p["intercept"][str(hour)] + p["R"] * wx["R"] / 100.0 + p["CC"] * wx["CC"] / 100.0))
+
+
+def day_pv(model, wx_by_hour, hours=BLOCKS["semi"]):
+    """白天半尖峰時段的平均預估 PV（kW）；無法估算時回傳 None。"""
+    vals = [predict_pv(model, h, wx_by_hour.get(h, {})) for h in hours]
+    vals = [v for v in vals if v is not None]
+    return sum(vals) / len(vals) if vals else None
 
 
 def block_upper(model, dt, preds, q="q95"):

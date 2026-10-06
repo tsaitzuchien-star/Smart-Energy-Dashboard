@@ -21,8 +21,10 @@ def synth_rows(days=40, start=date(2026, 7, 1)):
             base = 150 if hol else 300 + 10 * h
             off = not hol and h in (16, 17)
             y = base + 10 * (T - 28) - 0.05 * (R - 400) - (75 if off else 0)
+            CC = 50 + (i % 7)
             rows.append({"date": d, "hour": h, "daytype": dm.day_type(hol), "y": y, "mag_off": off,
-                         "T": T, "RH": 70 + (i % 4), "CC": 50 + (i % 7), "R": R, "P": 0.0})
+                         "T": T, "RH": 70 + (i % 4), "CC": CC, "R": R, "P": 0.0,
+                         "pv": max(0.0, 5 + 0.08 * R - 0.2 * CC)})
     return rows
 
 
@@ -41,6 +43,15 @@ class DemandModelTests(unittest.TestCase):
         m = dm.fit(synth_rows(), date(2026, 8, 9))
         self.assertIsNotNone(dm.predict_hour(m, "work", 10, {}))
         self.assertIsNone(dm.predict_hour(m, "nope", 10, {}))
+
+    def test_fit_pv_recovers_and_clamps(self):
+        rows = synth_rows()
+        m = {"pv": dm.fit_pv(rows, rows[-1]["date"], halflife=1e9)}
+        r = next(x for x in rows if x["hour"] == 12 and x["pv"] > 20)
+        self.assertAlmostEqual(dm.predict_pv(m, 12, r), r["pv"], delta=3.0)
+        self.assertEqual(dm.predict_pv(m, 12, {"R": -1e5, "CC": 0}), 0.0)
+        self.assertIsNone(dm.predict_pv(m, 12, {"R": 500}))
+        self.assertIsNone(dm.fit_pv(rows[:50], rows[-1]["date"]))   # 不足 14 天
 
     def test_quantile(self):
         self.assertEqual(dm.quantile([1, 2, 3, 4, 5], 0.5), 3)
@@ -66,11 +77,21 @@ class CalibrateTests(unittest.TestCase):
                         **{v + "_previous_day1": [1.0, None] for v in calibrate._OM_VARS.values()}}}
         self.assertEqual(list(calibrate.parse_openmeteo(j)), [(date(2026, 8, 28), 11)])
 
+    def test_parse_pv_sheet_shifts_to_interval_start_and_needs_all_meters(self):
+        head = [["系統名稱", "紀錄時間", "V", "A", "當前功率(W)", "kWh"]]
+        meters = ["BIPV-1", "BIPV-2", "斜坡PV", "鋼構PV"]
+        rows = head + [[m, f"2026-08-28 {t}", "220", "1", "10000", "1"] for m in meters for t in ("10:15:00", "10:30:00", "10:45:00", "11:00:00")]
+        rows += [[m, "2026-08-28 11:15:00", "220", "1", "10000", "1"] for m in meters[:3]]   # 少一組 → 不採用
+        pv = calibrate.parse_pv_sheet(rows)
+        self.assertEqual(pv, {(date(2026, 8, 28), 10): 40.0})
+
     def test_calibrate_rolling_metrics(self):
         m = calibrate.calibrate(synth_rows(days=35))
         self.assertLess(m["metrics"]["work"]["mae"], 5)
         self.assertIn("semi", m["resid_q"]["work"])
         self.assertEqual(m["trained_through"], "2026-08-04")
+        self.assertIn("pv", m["metrics"])
+        self.assertLess(m["metrics"]["pv"]["mae"], 5)
 
 
 def model_weather(now):
@@ -115,6 +136,12 @@ class CalibratedForecastTests(unittest.TestCase):
         close = fc["risk"]["semi"]["margin"] < forecast.RISK_TRIGGER_MARGIN
         self.assertEqual(fc["reserve_rthr"] > 0, close)
         self.assertTrue(any("480" in p or "降至 50%" in p for p in fc["mag_plan"]))
+
+    def test_solar_tile_uses_pv_model(self):
+        self.model["pv"] = dm.fit_pv(synth_rows(), date(2026, 8, 9))
+        w = model_weather(self.now)
+        fc = compute_forecast(w, ForecastInputs(), self.now, False, False, model=self.model)
+        self.assertAlmostEqual(fc["est_solar"], dm.day_pv(self.model, w["model_wx_tmr"]))
 
     def test_without_model_weather_uses_physics(self):
         fc = compute_forecast(fake_weather(self.now), ForecastInputs(), self.now, False, False, model=self.model)

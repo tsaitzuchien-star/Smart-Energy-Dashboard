@@ -2,12 +2,13 @@
 
 流程
 1. 讀「實測需量」工作表（每小時最大 15 分鐘需量；空白＝監控停機，跳過）。
-2. 向 Open-Meteo previous-runs API 取同期「前一天發布的預報」（與每天 18:00 實際拿得到的資訊一致）。
-3. 逐日滾動驗證：每一天只用它之前的資料訓練再預測，得到不偷看答案的誤差與「最壞情況」分位數。
-4. 用全部資料擬合最終係數，連同驗證結果寫入 JSON。
+2. 讀太陽能試算表（T-REC 四組 PV 每 15 分鐘功率），整理成每小時平均 PV，擬合明日 PV 預估；讀不到時略過。
+3. 向 Open-Meteo previous-runs API 取同期「前一天發布的預報」（與每天 18:00 實際拿得到的資訊一致）。
+4. 逐日滾動驗證：每一天只用它之前的資料訓練再預測，得到不偷看答案的誤差與「最壞情況」分位數。
+5. 用全部資料擬合最終係數，連同驗證結果寫入 JSON。
 
 GitHub Actions 每週執行（.github/workflows/calibrate.yml），需要 GOOGLE_CREDENTIALS。
-離線重跑：python calibrate.py --actual-csv 實測.csv --wx-json 氣象.json
+離線重跑：python calibrate.py --actual-csv 實測.csv --wx-json 氣象.json [--pv-csv PV.csv]
 """
 import argparse
 import csv
@@ -23,6 +24,9 @@ log = logging.getLogger("calibrate")
 
 ACTUAL_TAB = "實測需量"
 SHEET_ID = "1NZ0OPky-I-oWXfFTeVR8qpFT1pFBwQvRoSerJYJJMwY"
+PV_SHEET_ID = "14emzrciRx4VlmAgnwEgxJXioOPpN0zJeHeLkY0am87A"   # 中創園區_太陽能發電紀錄_雲端版
+PV_TAB = "中創園區_太陽能發電紀錄"
+PV_METERS = 4              # BIPV-1、BIPV-2、斜坡PV、鋼構PV；少於 4 組回報的時刻不採用
 WX_MODEL = "ecmwf_ifs"     # 與 weather.py 線上預報同一個模型
 _OM_VARS = {"T": "temperature_2m", "RH": "relative_humidity_2m", "CC": "cloud_cover",
             "R": "shortwave_radiation", "P": "precipitation"}
@@ -68,19 +72,60 @@ def parse_openmeteo(j, suffix="_previous_day1"):
     return out
 
 
+def _ts(s):
+    s = str(s).strip().replace("/", "-")
+    d, _, t = s.partition(" ")
+    hh, mm, *_ = (t or "0:0").split(":")
+    return datetime.combine(_date(d), datetime.min.time()).replace(hour=int(hh), minute=int(mm))
+
+
+def pv_hourly(points):
+    """points：[(紀錄時間, 全場 PV kW)]。T-REC 紀錄時間是該 15 分鐘的結束時刻，
+    所以 10:15 的值對應 10:00 開始的需量區間。回傳 {(date, hour): 該小時平均 kW}（至少 3 個 15 分鐘）。"""
+    acc = {}
+    for t, kw in points:
+        start = t - timedelta(minutes=15)
+        acc.setdefault((start.date(), start.hour), []).append(kw)
+    return {k: sum(v) / len(v) for k, v in acc.items() if len(v) >= 3}
+
+
+def parse_pv_sheet(rows):
+    """太陽能試算表（含標題列：系統名稱、紀錄時間、電壓、電流、當前功率(W)、累計度數）→ {(date, hour): kW}。"""
+    by_t = {}
+    for r in rows[1:]:
+        if len(r) < 5 or not str(r[1]).strip():
+            continue
+        try:
+            t, w = _ts(r[1]), float(str(r[4]).replace(",", "") or 0)
+        except ValueError:
+            continue
+        by_t.setdefault(t, {})[r[0]] = w
+    return pv_hourly([(t, sum(m.values()) / 1000.0) for t, m in by_t.items() if len(m) >= PV_METERS])
+
+
+def parse_pv_csv(rows):
+    """離線用：已加總的 CSV（date,time,pv_kw[,partial]）。"""
+    pts = []
+    for r in rows[1:]:
+        if len(r) >= 3 and r[2] != "" and (len(r) < 4 or r[3] in ("", "0")):
+            pts.append((_ts(f"{r[0]} {r[1]}"), float(r[2])))
+    return pv_hourly(pts)
+
+
 def mag_off(d, h, is_holiday):
     """該小時磁浮是否全關：夏月平日尖峰、空調時段內（16、17 點）。"""
     from forecast import tou_period
     return not is_holiday and h < 18 and tou_period(d, h) == "尖峰"
 
 
-def build_rows(actual, wx, is_holiday):
+def build_rows(actual, wx, is_holiday, pv=None):
+    pv = pv or {}
     rows = []
     for (d, h), y in actual.items():
         if h in dm.HOURS and (d, h) in wx:
             hol = is_holiday(d)
             rows.append({"date": d, "hour": h, "daytype": dm.day_type(hol), "y": y,
-                         "mag_off": mag_off(d, h, hol), **wx[(d, h)]})
+                         "mag_off": mag_off(d, h, hol), "pv": pv.get((d, h)), **wx[(d, h)]})
     return rows
 
 
@@ -95,12 +140,36 @@ def rolling_eval(rows, halflife=21.0, alpha=3.0):
         if len({r["date"] for r in train}) < MIN_TRAIN_DAYS:
             continue
         m = dm.fit(train, d - timedelta(days=1), halflife, alpha)
+        m["pv"] = dm.fit_pv(train, d - timedelta(days=1), halflife)
         for r in rows:
             if r["date"] == d:
                 p = dm.predict_hour(m, r["daytype"], r["hour"], r, r["mag_off"])
                 if p is not None:
-                    out.append({**r, "pred": p})
+                    out.append({**r, "pred": p, "pvf": dm.predict_pv(m, r["hour"], r)})
     return out
+
+
+def _block_resid(sub, hrs):
+    by_day = {}
+    for e in sub:
+        if e["hour"] in hrs:
+            a, p = by_day.get(e["date"], (-1e9, -1e9))
+            by_day[e["date"]] = (max(a, e["y"]), max(p, e["pred"]))
+    return [a - p for a, p in by_day.values()]
+
+
+def _q(res):
+    return {"q90": round(dm.quantile(res, 0.9), 1), "q95": round(dm.quantile(res, 0.95), 1),
+            "peak_mae": round(sum(abs(x) for x in res) / len(res), 1), "days": len(res)}
+
+
+def pv_metrics(evals):
+    """明日 PV 預估的逐時誤差（滾動驗證，只看有 PV 實測的小時）。"""
+    err = [e["pv"] - e["pvf"] for e in evals if e.get("pv") is not None and e.get("pvf") is not None]
+    if not err:
+        return None
+    return {"hours": len(err), "mae": round(sum(abs(x) for x in err) / len(err), 1),
+            "bias": round(sum(err) / len(err), 1)}
 
 
 def summarize(evals):
@@ -116,15 +185,9 @@ def summarize(evals):
                        "bias": round(sum(err) / len(err), 1)}
         resid_q[dt] = {}
         for blk, hrs in dm.BLOCKS.items():
-            by_day = {}
-            for e in sub:
-                if e["hour"] in hrs:
-                    a, p = by_day.get(e["date"], (-1e9, -1e9))
-                    by_day[e["date"]] = (max(a, e["y"]), max(p, e["pred"]))
-            res = [a - p for a, p in by_day.values()]
+            res = _block_resid(sub, hrs)
             if len(res) >= 10:
-                resid_q[dt][blk] = {"q90": round(dm.quantile(res, 0.9), 1), "q95": round(dm.quantile(res, 0.95), 1),
-                                    "peak_mae": round(sum(abs(x) for x in res) / len(res), 1), "days": len(res)}
+                resid_q[dt][blk] = _q(res)
     return metrics, resid_q
 
 
@@ -134,6 +197,10 @@ def calibrate(rows, halflife=21.0, alpha=3.0):
     recent = [e for e in evals if e["date"] > last - timedelta(days=EVAL_DAYS)]
     metrics, resid_q = summarize(recent)
     model = dm.fit(rows, last, halflife, alpha)
+    model["pv"] = dm.fit_pv(rows, last, halflife)
+    pvm = pv_metrics(recent)
+    if model["pv"] and pvm:
+        metrics["pv"] = pvm
     model.update({"trained_through": last.isoformat(), "first_date": min(r["date"] for r in rows).isoformat(),
                   "weather": f"Open-Meteo {WX_MODEL} 前一天預報", "metrics": metrics, "resid_q": resid_q,
                   "summer_only": all(r["date"].month in (6, 7, 8, 9) for r in rows),
@@ -163,11 +230,26 @@ def read_actual_sheet():
     return book.worksheet(ACTUAL_TAB).get_all_values()
 
 
+def read_pv_sheet():
+    """讀太陽能試算表；服務帳戶沒有權限或連不上時回傳空 dict（模型照常校正，只是不含 PV）。"""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        info = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+        scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        book = gspread.authorize(Credentials.from_service_account_info(info, scopes=scopes)).open_by_key(PV_SHEET_ID)
+        return parse_pv_sheet(book.worksheet(PV_TAB).get_all_values())
+    except Exception as e:   # noqa: BLE001 — PV 是加分項，失敗不擋校正
+        log.warning("讀不到太陽能試算表（%s），本次不含 PV", e)
+        return {}
+
+
 def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ap = argparse.ArgumentParser()
     ap.add_argument("--actual-csv", help="離線：實測需量 CSV（日期,時間,需量）")
     ap.add_argument("--wx-json", help="離線：Open-Meteo previous-runs 回應 JSON")
+    ap.add_argument("--pv-csv", help="離線：PV CSV（date,time,pv_kw[,partial]；time 為 T-REC 紀錄時間）")
     ap.add_argument("--out", default=dm.DEFAULT_PATH)
     a = ap.parse_args(argv)
 
@@ -186,10 +268,19 @@ def main(argv=None):
     else:
         wx = parse_openmeteo(fetch_weather(start, end))
 
+    if a.pv_csv:
+        with open(a.pv_csv, encoding="utf-8-sig") as f:
+            pv = parse_pv_csv(list(csv.reader(f)))
+    elif a.actual_csv:
+        pv = {}
+    else:
+        pv = read_pv_sheet()
+
     from calendar_tw import load_calendar
     cal = load_calendar({start.year, end.year})
-    rows = build_rows(actual, wx, cal.is_holiday)
-    log.info("實測 %d 小時，可用 %d 列（%s → %s）", len(actual), len(rows), start, end)
+    rows = build_rows(actual, wx, cal.is_holiday, pv)
+    log.info("實測 %d 小時，可用 %d 列（%s → %s），其中 %d 列有 PV", len(actual), len(rows), start, end,
+             sum(r["pv"] is not None for r in rows))
     model = calibrate(rows)
     work = model["metrics"].get("work", {})
     if model["n_days"].get("work", 0) < MIN_TRAIN_DAYS or not work or work["mae"] > MAX_ACCEPT_MAE:

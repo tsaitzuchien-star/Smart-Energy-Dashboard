@@ -284,7 +284,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
     event_kw = (event_ice_rthr / 6.0) * MAG_EFF if event_ice_rthr > 0 else 0.0
 
     calc_today, calc_tmr = {}, {}
-    risk, model_used = {}, False
+    risk, model_used, pv_tmr = {}, False, None
     today_max_net, today_worst_hour = 0.0, "未知"
     max_net_grid_demand, worst_hour, worst_hour_load, worst_hour_solar = 0.0, "未知", 0.0, 0.0
     worst_limit_tmr = contract_limit
@@ -309,13 +309,16 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
             dt_tmr, adj_tmr = _apply_model(model, calc_tmr, base_tmr, w.get("model_wx_tmr"), tmr_dt.date(), tmr_is_holiday)
             risk = _risk_blocks(model, dt_tmr, adj_tmr, tmr_dt.date())
             model_used = True
+            pv_tmr = demand_model.day_pv(model, w.get("model_wx_tmr") or {})
             wt, wm = _worst(calc_today), _worst(calc_tmr)
             today_max_net, today_worst_hour = wt["net"], wt["hour"]
             max_net_grid_demand, worst_hour = wm["net"], wm["hour"]
             worst_hour_load, worst_hour_solar = wm["load"], wm["solar"]
 
         avg_cp = sum([calc_tmr[h]["cp"] for h in calc_tmr]) / len(calc_tmr) if calc_tmr else 1.0
-        if inp.solar_mode == SOLAR_AUTO:
+        if inp.solar_mode == SOLAR_AUTO and pv_tmr is not None:
+            est_solar = pv_tmr   # 用 T-REC 實測校正的 PV 預估（09–16 平均）
+        elif inp.solar_mode == SOLAR_AUTO:
             est_solar = SOLAR_MAX_KW * min(1.0, w.get("tmr_rad", 400) / 1000.0) * avg_cp
         else:
             est_solar = inp.manual_solar
