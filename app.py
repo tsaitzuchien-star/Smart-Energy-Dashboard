@@ -616,8 +616,9 @@ with tab_trend:
     if err or not actual:
         st.info(err or "「實測需量」工作表還沒有資料。")
     else:
-        fc_daily = trend.parse_forecast_log(sheets["log"])
         fc_hourly = trend.parse_compare(sheets["compare"])
+        # 每日紀錄優先；沒有紀錄的日子（6/8–9/30 歷史氣象回測）用比對表逐時預測的當日最高
+        fc_daily = {**trend.daily_from_hourly(fc_hourly), **trend.parse_forecast_log(sheets["log"])}
         daily = trend.daily_table(actual, fc_daily)
         span = st.radio("期間", ["近 30 天", "近 90 天", "全部"], index=2, horizontal=True)
         if span != "全部":
@@ -669,7 +670,9 @@ with tab_trend:
 
         with st.expander("每日明細"):
             show_df(daily.sort_values("日期", ascending=False).assign(日期=lambda x: x["日期"].dt.strftime("%Y-%m-%d")))
-        st.caption("實測為監控主機每分鐘瞬間值換算的 15 分鐘平均（台電計費方式）；空白代表監控當天停機或保養，不補值。")
+        st.caption("實測為監控主機每分鐘瞬間值換算的 15 分鐘平均（台電計費方式）；空白代表監控當天停機或保養，不補值。"
+                   "2026/6/8–9/30 的預測是事後用當時歷史氣象回測重算（氣象接近實況，誤差主要來自負載模型），"
+                   "之後的預測則是每天 18:00 實際產生的紀錄。")
 
 # ====================== 參數說明 ======================
 with tab_help:

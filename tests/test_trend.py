@@ -44,6 +44,15 @@ class TrendTests(unittest.TestCase):
         self.assertEqual(r["距契約最近(kW)"], 0.2)
         self.assertEqual(r["距契約最近時段"], "11:00 半尖峰")
 
+    def test_daily_from_hourly_takes_max_and_log_wins(self):
+        fc = trend.parse_compare(COMPARE + [["2026-08-28", "12:00", "五", "半尖峰", "516", "488.4", ""],
+                                            ["2026-08-29", "12:00", "六", "半尖峰", "616", "50", ""]])
+        daily = trend.daily_from_hourly(fc)
+        self.assertEqual(daily, {date(2026, 8, 28): 488.4, date(2026, 8, 29): 50.0})
+        merged = {**daily, **trend.parse_forecast_log(LOG)}
+        self.assertEqual(merged[date(2026, 8, 28)], 490.0)
+        self.assertEqual(merged[date(2026, 8, 29)], 50.0)
+
     def test_hourly_table_limits_follow_periods(self):
         h = trend.hourly_table(date(2026, 8, 28), trend.parse_actual(ACTUAL), trend.parse_compare(COMPARE))
         self.assertEqual(len(h), 24)

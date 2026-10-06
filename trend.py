@@ -85,6 +85,14 @@ def parse_compare(rows):
     return out
 
 
+def daily_from_hourly(fc_hourly):
+    """逐時預測 → {日期: 當日預測最高}；用來補上主工作表沒有的日子（例如歷史氣象回測）。"""
+    out = {}
+    for (d, _), v in fc_hourly.items():
+        out[d] = max(out.get(d, v), v)
+    return out
+
+
 def daily_table(actual, fc_daily):
     """每日一列：實測日間最高（08–18）、全日距契約最近、預測最高與誤差。"""
     days = sorted({d for d, _ in actual} | set(fc_daily))
