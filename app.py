@@ -325,7 +325,7 @@ with tab_tonight:
             body = "氣象斷線，以下為保守盲估值，請人工確認現場狀況。"
         elif margin >= 0:
             body = (f"明日（{tmr_str} {tmr_week}）{worst_hour} 預估台電需量 <b>{max_net_grid_demand:.0f} kW</b>，"
-                    f"距警戒線 {worst_limit_tmr:.0f} kW 尚有 <b>{margin:.0f} kW</b>。請依右側清單完成三項設定，並在 15:50 前完成磁浮降載。")
+                    f"距警戒線 {worst_limit_tmr:.0f} kW 尚有 <b>{margin:.0f} kW</b>。請依右側清單完成三項設定，並在 15:50 前完成磁浮{'全關' if fc['tmr_has_peak'] else '降載'}。")
         else:
             body = (f"明日（{tmr_str} {tmr_week}）{worst_hour} 預估台電需量 <b>{max_net_grid_demand:.0f} kW</b>，"
                     f"已超過警戒線 {worst_limit_tmr:.0f} kW <b>{-margin:.0f} kW</b>！請務必長時間儲冰，並準備手動卸載。")
@@ -354,7 +354,9 @@ with tab_tonight:
                 items = [
                     ("夜間儲冰", f"{start_time_str} → {end_time_str}", "最晚 07:00 結束，避開早晨需量尖峰"),
                     ("日間融冰", f"{melt_start} → {melt_end}", melt_memo.lstrip("*")),
-                    ("磁浮主機（人工設定）", "08:00 上限 70%　15:50 降載 50%", "BMS 連動前，請併入廠務每日巡檢"),
+                    ("磁浮主機（人工設定）",
+                     "08:00 上限 70%　15:50 全關（融冰供冷）" if fc["tmr_has_peak"] else "08:00 上限 70%　15:50 降載 50%",
+                     "BMS 連動前，請併入廠務每日巡檢"),
                 ]
             for i, (name, val, memo) in enumerate(items):
                 st.checkbox(f"**{name}**　{val}  \n{memo}", key=f"chk_{i}_{tmr_str}")
@@ -422,7 +424,8 @@ with tab_tonight:
                 (f"歷史基礎需量（{now_dt.month} 月）", tmr_true_base_load, "#1E4F8C"),
                 ("進駐加載", tmr_actual_load_growth, "#1E4F8C"),
                 ("空調熱力與慣性加載" if thermal >= 0 else "下班卸載調整", thermal, "#1E4F8C" if thermal >= 0 else "#1A7F5A"),
-                (f"磁浮 {int(inp.emergency_mag_limit_pct)}% 封印降載", -tmr_shaved_kw, "#1A7F5A"),
+                ("磁浮全關（融冰供冷）" if calc_tmr.get(worst_hour, {}).get("period") == "尖峰"
+                 else f"磁浮 {int(inp.emergency_mag_limit_pct)}% 封印降載", -tmr_shaved_kw, "#1A7F5A"),
                 (f"太陽能（{worst_hour}）", -worst_hour_solar, "#1A7F5A"),
             ]
             total = max_net_grid_demand
@@ -587,7 +590,7 @@ with tab_help:
 
 **假日判斷**：依政府行事曆（含補班日），每天更新；抓不到時頁面上方會出現警告，並暫以週末判斷。臨時變更（颱風假等）可寫在 `data/calendar_overrides.json`。
 
-**需量怎麼算**：歷史基礎需量 + 進駐加載 + 空調熱力與慣性加載 − 磁浮 50% 封印降載 − 太陽能 = 預估台電需量。
+**需量怎麼算**：歷史基礎需量 + 進駐加載 + 空調熱力與慣性加載 − 磁浮降載（尖峰 16:00 起全關、由融冰供冷；其他時段封印 50%）− 太陽能 = 預估台電需量。園區空調供應時間 07:30–18:00。
 
 **設備參數**：CHU-2（磁浮冰機）· BCU-1（儲冰主機）· IB-1（2500 RT-HR）· AHU-G11 / GB1 / GB2。
 
