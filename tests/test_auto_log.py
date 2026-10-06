@@ -95,6 +95,16 @@ class AutoLogTests(unittest.TestCase):
         self.assertEqual(len(ws.data), 1 + len(rows))
         self.assertEqual(book.tabs[auto_log.ACTUAL_TAB].data, [auto_log.ACTUAL_HEADERS])
 
+    def test_late_run_after_midnight_skipped(self):
+        self.assertTrue(auto_log.late_run(datetime(2026, 10, 7, 0, 33, tzinfo=TZ)))
+        self.assertFalse(auto_log.late_run(datetime(2026, 10, 6, 17, 47, tzinfo=TZ)))
+        self.assertFalse(auto_log.late_run(datetime(2026, 10, 6, 23, 50, tzinfo=TZ)))
+
+    def test_evening_logged(self):
+        now = datetime(2026, 10, 6, 19, 47, tzinfo=TZ)
+        self.assertFalse(auto_log.evening_logged(["紀錄時間", "2026-10-06 15:42:56", "2026-10-05 20:01:10"], now))
+        self.assertTrue(auto_log.evening_logged(["紀錄時間", "2026-10-06 18:12:03"], now))
+
     def test_offline_returns_none(self):
         now = datetime(2026, 9, 30, 18, 0, tzinfo=TZ)
         w = fake_weather(now); w["status_code"] = 0

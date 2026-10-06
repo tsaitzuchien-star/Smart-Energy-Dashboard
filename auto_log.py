@@ -21,6 +21,26 @@ DATA_VERSION = "v2-實算預測"          # 物理模型
 DATA_VERSION_CAL = "v3-實測校正"      # 實測校正模型（model/demand_model.json）
 
 
+# GitHub 排程常延後；過了午夜才跑，「明日」會變成後天，還會搶先占掉當晚該寫的日期。
+# 中午前開始的執行一律不寫，等當晚的排程（備援排程會再補一次）。
+EARLIEST_RUN_HOUR = 12
+EVENING_HOUR = 17          # 當天 17:00 後已寫過一筆，備援排程就不再重複寫
+
+
+def late_run(now):
+    return now.hour < EARLIEST_RUN_HOUR
+
+
+def evening_logged(timestamps, now):
+    """紀錄時間欄裡是否已有今天 17:00 之後寫入的一筆（下午手動測試的那筆不算）。"""
+    day = now.strftime("%Y-%m-%d")
+    for ts in timestamps:
+        ts = str(ts)
+        if ts.startswith(day) and len(ts) >= 13 and ts[11:13].isdigit() and int(ts[11:13]) >= EVENING_HOUR:
+            return True
+    return False
+
+
 def data_version(fc):
     return DATA_VERSION_CAL if fc.get("model_used") else DATA_VERSION
 HEADERS = [
@@ -121,6 +141,9 @@ def main():
         return 1
 
     now = datetime.now(TW_TZ)
+    if late_run(now):
+        log.warning("⚠️ 排程延後到 %s 才執行，已過午夜；不寫入，避免把預測寫到錯的日期", now.strftime("%Y-%m-%d %H:%M"))
+        return 0
     w = fetch_smart_weather(vc_key=os.environ.get("VC_API_KEY") or None, now=now)
     cal = load_calendar({now.year, (now + timedelta(days=1)).year})
     for msg in cal.warnings:
@@ -141,8 +164,11 @@ def main():
     if sheet.row_values(1) != HEADERS:
         # 舊表頭是 11 欄（且舊資料為假資料）；更新第 1 列，舊資料列的「資料版本」欄為空即可辨識
         sheet.update(range_name="A1", values=[HEADERS])
-    sheet.append_row(row, value_input_option="USER_ENTERED")
-    log.info("✅ 成功寫入：%s", dict(zip(HEADERS, row)))
+    if evening_logged(sheet.col_values(1), now):
+        log.info("ℹ️ 今晚已寫過，主表略過")
+    else:
+        sheet.append_row(row, value_input_option="USER_ENTERED")
+        log.info("✅ 成功寫入：%s", dict(zip(HEADERS, row)))
 
     compare_rows = build_compare_rows(now, w, cal)
     if compare_rows:
