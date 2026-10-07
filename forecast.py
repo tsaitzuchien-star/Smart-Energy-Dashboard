@@ -18,6 +18,11 @@ MAG_CHILLER_RT = 240.0
 MAG_CAP_LIMIT = 0.50
 AC_START, AC_END = "07:30", "18:00"          # 園區空調供應時間
 PEAK_MELT_HRS = 2.0                          # 夏月平日 16:00–18:00 融冰全量取代磁浮
+# 2026 年 4/1 起每個上班日都有進駐廠商申請延長空調，融冰延到 19:30。
+# 18:00 後只剩申請廠商用空調，冷房需求比照假日磁浮 30% 負載估算（假設值，待現場確認）。
+MELT_END = "19:30"
+EVENING_MELT_HRS = 1.5                       # 18:00–19:30
+EVENING_LOAD_RATIO = 0.30
 MAG_EFF = 0.7
 MAG_PEAK_OFF_KW = MAG_CHILLER_RT * MAG_EFF   # 尖峰時段磁浮全關，冷房全由融冰供應
 SOLAR_MAX_KW = 145.0
@@ -361,8 +366,8 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
     tmr_has_peak = tou_period(tmr_dt.date(), 16) == "尖峰"
     if tmr_is_holiday:
         extra_ice_rthr_for_cooling = 0.0
-    elif tmr_has_peak:  # 16:00 起磁浮全關，融冰全量供冷到空調結束
-        extra_ice_rthr_for_cooling = MAG_CHILLER_RT * PEAK_MELT_HRS
+    elif tmr_has_peak:  # 16:00 起磁浮全關，融冰全量供冷到 18:00，再以部分負載供應延長空調到 19:30
+        extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (PEAK_MELT_HRS + EVENING_LOAD_RATIO * EVENING_MELT_HRS)
     else:
         extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - inp.active_mag_limit) * 4.0
     extra_ice_rthr_for_cooling += event_ice_rthr
@@ -383,7 +388,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
         start_time_str, end_time_str = "關閉排程", "關閉排程"
         time_color = "#dc3545" if is_pure_holiday else "#28a745"
         if is_pure_holiday:
-            melt_start, melt_end, melt_memo = "關閉排程", "關閉排程", "*明日為純假日，務必手動關閉自動排程！"
+            melt_start, melt_end, melt_memo = "關閉排程", "關閉排程", "*明日為純假日，不儲冰，務必手動關閉自動排程！廠商申請空調由磁浮 30% 負載供應。"
         else:
             melt_start, melt_end, melt_memo = "停用融冰", "直供冰水", "*【省錢策略】假日全天離峰，建議直接開啟磁浮主機，免除儲冰耗損！"
     else:
@@ -396,7 +401,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
         start_time_str, end_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00"
         time_color = "#D2691E"
         if tmr_has_peak:
-            melt_start, melt_end, melt_memo = "16:00", AC_END, f"*尖峰 16:00 起磁浮全關，融冰全量供冷至 {AC_END} 空調結束。"
+            melt_start, melt_end, melt_memo = "16:00", MELT_END, f"*尖峰 16:00 起磁浮全關，融冰供冷至 {MELT_END}（含廠商申請延長空調）。"
             if reserve_rthr:
                 melt_memo += f"另留約 {reserve_rthr:.0f} RT-HR 給早上即時降載。"
         else:
@@ -446,7 +451,7 @@ def _mag_plan(risk, tmr_has_peak, tmr_is_holiday):
                     f"低於 {semi['release']:.0f} kW 持續 15 分鐘再恢復（{semi['alert']:.0f} kW 為 call 報 90% 預警）")
     peak = risk.get("peak")
     if tmr_has_peak:
-        line = "15:50 磁浮全關，融冰供冷至 18:00"
+        line = f"15:50 磁浮全關，融冰供冷至 {MELT_END}"
         if peak:
             line += f"；15 分鐘平均超過 {peak['action']:.0f} kW 時調降 AHU 風量"
         plan.append(line)
