@@ -51,7 +51,7 @@ class PeakMagOffTests(unittest.TestCase):
         self.assertEqual(fc["calc_tmr"]["16:00"]["h_shaved"], MAG_PEAK_OFF_KW)
         self.assertLess(fc["calc_tmr"]["14:00"]["h_shaved"], MAG_PEAK_OFF_KW)
         self.assertTrue(fc["tmr_has_peak"])
-        self.assertEqual((fc["melt_start"], fc["melt_end"]), ("16:00", "18:00"))
+        self.assertEqual((fc["melt_start"], fc["melt_end"]), ("16:00", "19:30"))
 
     def test_non_summer_keeps_partial_limit(self):
         now = datetime(2026, 12, 1, 18, 0, tzinfo=TZ)  # 明日 12/2 週三，非夏月
