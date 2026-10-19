@@ -241,7 +241,7 @@ def _worst(calc):
 def _apply_model(model, calc, calc_base, wx, day, is_holiday):
     """把逐時需量換成實測校正模型的預測；側邊欄調整（活動、進駐率、兵推）以物理模型的差值疊加上去。"""
     dt = demand_model.day_type(is_holiday)
-    mag_off = {h for h in demand_model.HOURS if not is_holiday and h < 18 and tou_period(day, h) == "尖峰"}
+    mag_off = {h for h in demand_model.HOURS if not is_holiday and h <= 18 and tou_period(day, h) == "尖峰"}
     preds = demand_model.predict_day(model, dt, wx or {}, mag_off)
     adj = {}
     for h, c in calc.items():
@@ -392,7 +392,12 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
         else:
             melt_start, melt_end, melt_memo = "停用融冰", "直供冰水", "*【省錢策略】假日全天離峰，建議直接開啟磁浮主機，免除儲冰耗損！"
     else:
-        suggested_ice_hrs = max(1.5, min(9.0, ((needed_ice_rthr_for_grid + extra_ice_rthr_for_cooling) * 1.2) / ICE_CHILLER_CAP_RT))
+        if tmr_has_peak:
+            suggested_ice_hrs = max(1.5, min(9.0, ((needed_ice_rthr_for_grid + extra_ice_rthr_for_cooling) * 1.2) / ICE_CHILLER_CAP_RT))
+        elif needed_ice_rthr_for_grid > 0:  # 非夏月平常不儲冰；只有預測逼近契約時才建議儲冰
+            suggested_ice_hrs = max(1.5, min(9.0, needed_ice_rthr_for_grid * 1.2 / ICE_CHILLER_CAP_RT))
+        else:
+            suggested_ice_hrs = 0.0
         end_minutes = 7 * 60
         exact_start = int(end_minutes - (suggested_ice_hrs * 60))
         start_minutes = (exact_start // 10) * 10
@@ -404,8 +409,12 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
             melt_start, melt_end, melt_memo = "16:00", MELT_END, f"*尖峰 16:00 起磁浮全關，融冰供冷至 {MELT_END}（含廠商申請延長空調）。"
             if reserve_rthr:
                 melt_memo += f"另留約 {reserve_rthr:.0f} RT-HR 給早上即時降載。"
+        elif suggested_ice_hrs:
+            melt_start, melt_end, melt_memo = "10:00", "16:00", "*非夏月平常不儲冰；明日預測逼近契約，建議儲冰並於需量高峰融冰。"
         else:
-            melt_start, melt_end, melt_memo = "10:00", "16:00", "*依 IB-1 設計 13°C 進水條件執行。"
+            start_time_str, end_time_str = "不儲冰", "不儲冰"
+            time_color = "#28a745"
+            melt_start, melt_end, melt_memo = "停用融冰", "磁浮直供", "*非夏月不儲冰，由磁浮主機直接供冷；需量逼近門檻時調降磁浮負載。"
 
     return {
         "api_is_online": api_is_online,
@@ -445,9 +454,11 @@ def _mag_plan(risk, tmr_has_peak, tmr_is_holiday):
     semi = risk.get("semi")
     if semi:
         if semi["margin"] < 20:
-            plan.append(f"10:00–12:00 預先將磁浮上限降至 50%，由融冰補足（明日最壞情況 {semi['p95']:.0f} kW，"
+            backup = "由融冰補足" if tmr_has_peak else "非夏月無融冰備援，同步調降 AHU 風量"
+            plan.append(f"10:00–12:00 預先將磁浮上限降至 50%，{backup}（明日最壞情況 {semi['p95']:.0f} kW，"
                         f"距 {semi['limit']:.0f} kW 僅 {semi['margin']:.0f} kW）")
-        plan.append(f"{semi['hours']} 15 分鐘平均超過 {semi['action']:.0f} kW：磁浮降至 50%、開融冰；"
+        relief = "磁浮降至 50%、開融冰" if tmr_has_peak else "磁浮降至 50%、調降 AHU 風量"
+        plan.append(f"{semi['hours']} 15 分鐘平均超過 {semi['action']:.0f} kW：{relief}；"
                     f"低於 {semi['release']:.0f} kW 持續 15 分鐘再恢復（{semi['alert']:.0f} kW 為 call 報 90% 預警）")
     peak = risk.get("peak")
     if tmr_has_peak:

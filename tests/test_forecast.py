@@ -59,6 +59,13 @@ class PeakMagOffTests(unittest.TestCase):
         self.assertLess(fc["calc_tmr"]["16:00"]["h_shaved"], MAG_PEAK_OFF_KW)
         self.assertFalse(fc["tmr_has_peak"])
 
+    def test_non_summer_workday_no_ice(self):
+        now = datetime(2026, 10, 19, 18, 0, tzinfo=TZ)  # 明日 10/20 週二，非夏月：現場不儲冰
+        fc = compute_forecast(fake_weather(now), ForecastInputs(), now, False, False)
+        if fc["max_net_grid_demand"] < fc["worst_limit_tmr"] - 15:
+            self.assertEqual(fc["suggested_ice_hrs"], 0.0)
+            self.assertEqual(fc["start_time_str"], "不儲冰")
+
 
 if __name__ == "__main__":
     unittest.main()
