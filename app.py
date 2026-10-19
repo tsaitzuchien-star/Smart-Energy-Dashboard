@@ -317,6 +317,12 @@ with tab_tonight:
         lead = "今晚不需要儲冰，並手動解除自動排程" if is_pure_holiday else "假日活動：建議暫停儲冰，明日直接啟動磁浮主機"
         body = (f"明日（{tmr_str} {tmr_week}）為休息日，" + ("無租借活動，務必手動關閉自動排程。" if is_pure_holiday
                 else f"有租借活動（{event_ice_rthr:.0f} RT-HR），白天電價極低，直供冰水最划算。"))
+    elif suggested_ice_hrs == 0:
+        time_html = '<div class="big"><div class="t">不儲冰</div></div>'
+        lead = "非夏月：今晚不儲冰，明日由磁浮直接供冷"
+        margin = worst_limit_tmr - max_net_grid_demand
+        body = (f"明日（{tmr_str} {tmr_week}）{worst_hour} 預估台電需量 <b>{max_net_grid_demand:.0f} kW</b>，"
+                f"距警戒線 {worst_limit_tmr:.0f} kW 尚有 <b>{margin:.0f} kW</b>。沒有融冰備援，需量逼近門檻時請調降磁浮負載與 AHU 風量。")
     else:
         time_html = (f'<div class="big"><div class="t">{start_time_str}</div><div class="arrow">→</div>'
                      f'<div class="t">{end_time_str}</div></div>')
@@ -353,13 +359,14 @@ with tab_tonight:
                 ]
             else:
                 items = [
-                    ("夜間儲冰", f"{start_time_str} → {end_time_str}",
+                    ("夜間儲冰", "不儲冰" if suggested_ice_hrs == 0 else f"{start_time_str} → {end_time_str}",
                      (f"收假前一晚：休了 {fc['prev_off_days']} 天，儲冰槽回溫，已多排約 "
                       f"{fc['rewarm_hrs']:.1f} 小時；" if fc["rewarm_rthr"] else "")
-                     + "最晚 07:00 結束，避開早晨需量尖峰"),
+                     + ("非夏月不儲冰，維持儲冰排程關閉" if suggested_ice_hrs == 0 else "最晚 07:00 結束，避開早晨需量尖峰")),
                     ("日間融冰", f"{melt_start} → {melt_end}", melt_memo.lstrip("*")),
                     ("磁浮主機（人工設定）",
-                     "08:00 上限 70%　15:50 全關（融冰供冷）" if fc["tmr_has_peak"] else "08:00 上限 70%　15:50 降載 50%",
+                     "08:00 上限 70%　15:50 全關（融冰供冷）" if fc["tmr_has_peak"]
+                     else ("依需量調整（無融冰備援）" if suggested_ice_hrs == 0 else "08:00 上限 70%　15:50 降載 50%"),
                      "；".join(fc["mag_plan"]) if fc["mag_plan"] else "BMS 連動前，請併入廠務每日巡檢"),
                 ]
             for i, (name, val, memo) in enumerate(items):
