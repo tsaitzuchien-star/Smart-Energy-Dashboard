@@ -18,10 +18,12 @@ MAG_CHILLER_RT = 240.0
 MAG_CAP_LIMIT = 0.50
 AC_START, AC_END = "07:30", "18:00"          # 園區空調供應時間
 PEAK_MELT_HRS = 2.0                          # 夏月平日 16:00–18:00 融冰全量取代磁浮
-# 2026 年 4/1 起每個上班日都有進駐廠商申請延長空調，融冰延到 19:30。
-# 18:00 後只剩申請廠商用空調，冷房需求比照假日磁浮 30% 負載估算（假設值，待現場確認）。
-MELT_END = "19:30"
-EVENING_MELT_HRS = 1.5                       # 18:00–19:30
+# 融冰時段依 ISO50001 空調系統控制程序（2026-10-19 審查版）原排程：平日 10:50–19:00。
+# 每個上班日都有進駐廠商申請延長空調，18:00 後只剩申請廠商用空調，冷房需求比照假日磁浮 30% 負載估算。
+MELT_START, MELT_END = "10:50", "19:00"
+EVENING_MELT_HRS = 1.0                       # 18:00–19:00
+# 磁浮 CHU-2：原廠可調 20–100%；控制程序 v1.1 平日基載約 60%；非上班日廠商申請空調固定 30%。
+MAG_BASE_PCT, MAG_MIN_PCT, MAG_MAX_PCT = 60, 20, 100
 EVENING_LOAD_RATIO = 0.30
 MAG_EFF = 0.7
 MAG_PEAK_OFF_KW = MAG_CHILLER_RT * MAG_EFF   # 尖峰時段磁浮全關，冷房全由融冰供應
@@ -366,7 +368,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
     tmr_has_peak = tou_period(tmr_dt.date(), 16) == "尖峰"
     if tmr_is_holiday:
         extra_ice_rthr_for_cooling = 0.0
-    elif tmr_has_peak:  # 16:00 起磁浮全關，融冰全量供冷到 18:00，再以部分負載供應延長空調到 19:30
+    elif tmr_has_peak:  # 16:00 起磁浮全關，融冰全量供冷到 18:00，再以部分負載供應延長空調到 19:00
         extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (PEAK_MELT_HRS + EVENING_LOAD_RATIO * EVENING_MELT_HRS)
     else:
         extra_ice_rthr_for_cooling = MAG_CHILLER_RT * (1.0 - inp.active_mag_limit) * 4.0
@@ -406,11 +408,12 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
         start_time_str, end_time_str = f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "07:00"
         time_color = "#D2691E"
         if tmr_has_peak:
-            melt_start, melt_end, melt_memo = "16:00", MELT_END, f"*尖峰 16:00 起磁浮全關，融冰供冷至 {MELT_END}（含廠商申請延長空調）。"
+            melt_start, melt_end, melt_memo = MELT_START, MELT_END, (f"*{MELT_START} 起融冰輔助供冷；尖峰 16:00 起磁浮全關，"
+                                                                    f"融冰全量供冷至 {MELT_END}（含廠商申請延長空調）。")
             if reserve_rthr:
                 melt_memo += f"另留約 {reserve_rthr:.0f} RT-HR 給早上即時降載。"
         elif suggested_ice_hrs:
-            melt_start, melt_end, melt_memo = "10:00", "16:00", "*非夏月平常不儲冰；明日預測逼近契約，建議儲冰並於需量高峰融冰。"
+            melt_start, melt_end, melt_memo = MELT_START, MELT_END, "*非夏月平常不儲冰；明日預測逼近契約，建議儲冰並於需量高峰融冰。"
         else:
             start_time_str, end_time_str = "不儲冰", "不儲冰"
             time_color = "#28a745"
