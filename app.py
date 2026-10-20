@@ -5,7 +5,7 @@ import altair as alt
 import pandas as pd
 
 from calendar_tw import load_calendar
-from forecast import ForecastInputs, compute_forecast, off_days_before, OVERTIME_ONTIME
+from forecast import ForecastInputs, compute_forecast, off_days_before, OVERTIME_ONTIME, MAG_BASE_PCT, MAG_MIN_PCT, MAG_MAX_PCT
 import trend
 from weather import fetch_smart_weather, TARGET_HOURS, TW_TZ
 
@@ -365,8 +365,9 @@ with tab_tonight:
                      + ("非夏月不儲冰，維持儲冰排程關閉" if suggested_ice_hrs == 0 else "最晚 07:00 結束，避開早晨需量尖峰")),
                     ("日間融冰", f"{melt_start} → {melt_end}", melt_memo.lstrip("*")),
                     ("磁浮主機（人工設定）",
-                     "08:00 上限 70%　15:50 全關（融冰供冷）" if fc["tmr_has_peak"]
-                     else ("依需量調整（無融冰備援）" if suggested_ice_hrs == 0 else "08:00 上限 70%　15:50 降載 50%"),
+                     f"07:35 啟動、基載約 {MAG_BASE_PCT}%　15:50 全關（融冰供冷）" if fc["tmr_has_peak"]
+                     else (f"07:35 啟動、依需量在 {MAG_MIN_PCT}–{MAG_MAX_PCT}% 間調整（無融冰備援）" if suggested_ice_hrs == 0
+                           else f"07:35 啟動、基載約 {MAG_BASE_PCT}%　需量逼近門檻時降載"),
                      "；".join(fc["mag_plan"]) if fc["mag_plan"] else "BMS 連動前，請併入廠務每日巡檢"),
                 ]
             for i, (name, val, memo) in enumerate(items):
@@ -659,7 +660,7 @@ with tab_help:
 
 **假日判斷**：依政府行事曆（含補班日），每天更新；抓不到時頁面上方會出現警告，並暫以週末判斷。臨時變更（颱風假等）可寫在 `data/calendar_overrides.json`。
 
-**需量怎麼算**：歷史基礎需量 + 進駐加載 + 空調熱力與慣性加載 − 磁浮降載（尖峰 16:00 起全關、由融冰供冷；其他時段封印 50%）− 太陽能 = 預估台電需量。園區空調供應時間 07:30–18:00，上班日廠商申請延長空調至 19:30（融冰供應）；假日不儲冰，由磁浮 30% 負載供應。
+**需量怎麼算**：歷史基礎需量 + 進駐加載 + 空調熱力與慣性加載 − 磁浮降載（尖峰 16:00 起全關、由融冰供冷；其他時段封印 50%）− 太陽能 = 預估台電需量。園區空調供應時間 07:30–18:00，上班日融冰 10:50–19:00，廠商申請延長空調由融冰供應；磁浮原廠可調 20–100%，平日基載約 60%；假日不儲冰，廠商申請空調由磁浮 30% 負載供應。
 
 **設備參數**：CHU-2（磁浮冰機 240 RT）· BCU-1（儲冰主機）· IB-1（2500 RT-HR）· AHU-G11 / GB1 / GB2。
 

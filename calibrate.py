@@ -113,7 +113,7 @@ def parse_pv_csv(rows):
 
 
 def mag_off(d, h, is_holiday):
-    """該小時磁浮是否全關：夏月平日尖峰、融冰供冷時段內（16–18 點；融冰到 19:30）。"""
+    """該小時磁浮是否全關：夏月平日尖峰、融冰供冷時段內（16–18 點；融冰到 19:00）。"""
     from forecast import tou_period
     return not is_holiday and h <= 18 and tou_period(d, h) == "尖峰"
 
