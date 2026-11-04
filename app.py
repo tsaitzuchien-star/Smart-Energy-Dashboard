@@ -605,13 +605,18 @@ with tab_trend:
         last = daily.dropna(subset=["距契約最近(kW)"])
         worst = last.loc[last["距契約最近(kW)"].idxmin()] if not last.empty else None
         both = daily.dropna(subset=["實測日間最高(kW)", "預測最高(kW)"])
-        c1, c2, c3 = st.columns(3)
+        split = trend.error_split(both["誤差(kW)"])
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("期間日間最高", f'{daily["實測日間最高(kW)"].max():.0f} kW')
         if worst is not None:
             c2.metric("距契約最近", f'{worst["距契約最近(kW)"]:.1f} kW',
                       f'{worst["日期"]:%m/%d} {worst["距契約最近時段"]}', delta_color="off")
         c3.metric("預測平均誤差", f'{both["誤差(kW)"].abs().mean():.0f} kW' if not both.empty else "—",
                   f"{len(both)} 天可比對", delta_color="off")
+        c4.metric("預估偏高", f'{split["high_avg"]:.0f} kW' if split["high_avg"] is not None else "—",
+                  f'{split["high_days"]} 天（預測 > 實測）', delta_color="off")
+        c5.metric("預估偏低", f'{split["low_avg"]:.0f} kW' if split["low_avg"] is not None else "—",
+                  f'{split["low_days"]} 天（預測 < 實測）', delta_color="off")
 
         long = daily.melt(id_vars=["日期", "星期"], value_vars=["實測日間最高(kW)", "預測最高(kW)"],
                           var_name="項目", value_name="kW").dropna(subset=["kW"])

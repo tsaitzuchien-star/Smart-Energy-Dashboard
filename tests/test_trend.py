@@ -53,6 +53,11 @@ class TrendTests(unittest.TestCase):
         self.assertEqual(merged[date(2026, 8, 28)], 490.0)
         self.assertEqual(merged[date(2026, 8, 29)], 50.0)
 
+    def test_error_split_over_and_under(self):
+        s = trend.error_split([-30, -10, 25.8, 0, None, float("nan")])
+        self.assertEqual(s, {"high_days": 2, "high_avg": 20.0, "low_days": 1, "low_avg": 25.8})
+        self.assertEqual(trend.error_split([]), {"high_days": 0, "high_avg": None, "low_days": 0, "low_avg": None})
+
     def test_hourly_table_limits_follow_periods(self):
         h = trend.hourly_table(date(2026, 8, 28), trend.parse_actual(ACTUAL), trend.parse_compare(COMPARE))
         self.assertEqual(len(h), 24)
