@@ -117,6 +117,15 @@ def daily_table(actual, fc_daily):
     return pd.DataFrame(rows)
 
 
+def error_split(errors):
+    """誤差（實測 − 預測）拆成預估偏高（誤差 < 0）與偏低（誤差 > 0）：各回傳天數與平均 kW（取絕對值）。"""
+    errs = [e for e in errors if e is not None and not pd.isna(e)]
+    hi = [-e for e in errs if e < 0]
+    lo = [e for e in errs if e > 0]
+    avg = lambda xs: round(sum(xs) / len(xs), 1) if xs else None
+    return {"high_days": len(hi), "high_avg": avg(hi), "low_days": len(lo), "low_avg": avg(lo)}
+
+
 def hourly_table(d, actual, fc_hourly):
     """單日 24 小時：實測、預測（有才填）、該時段契約上限。"""
     return pd.DataFrame([{
