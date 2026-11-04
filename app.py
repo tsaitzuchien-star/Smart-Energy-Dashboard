@@ -375,7 +375,9 @@ with tab_tonight:
 
     # --- 明日最壞情況（實測校正模型）---
     if fc["risk"] and not is_holiday_mode:
-        names = {"semi": "白天半尖峰", "peak": "尖峰空調時段"}
+        # 非夏月沒有尖峰時段（平日 06–11、14–24 半尖峰 516，11–14 離峰），標題不寫「尖峰」以免誤會
+        names = ({"semi": "白天半尖峰", "peak": "尖峰空調時段"} if fc["is_summer_tmr"]
+                 else {"semi": "白天時段", "peak": "下午空調時段"})
         cells = ""
         for blk, r in fc["risk"].items():
             col = "#B3261E" if r["margin"] < 0 else ("#7A4F00" if r["margin"] < 30 else "#0F5C41")
