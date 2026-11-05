@@ -1,7 +1,7 @@
 name: 園區即時總覽（ctic-ems-dashboard）
 
 # 監控電腦每 15 分鐘（:01/:16/:31/:46）把全園區度數寫進 Google 雲端「BMS自動匯出」，
-# 這裡在之後幾分鐘整理成 live.json，放到本 repo 的 ems-live 分支給網站讀。
+# 這裡在之後幾分鐘整理成 live.json（園區彙總）與 rooms.json（各分路），放到本 repo 的 ems-live 分支給網站讀。
 # GitHub 排程可能延後幾分鐘到幾十分鐘，網站上會顯示資料時間。
 on:
   schedule:
@@ -24,12 +24,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - run: pip install requests gspread google-auth cryptography
+      - run: pip install requests gspread google-auth
       - name: 整理 live.json
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          # 房間／迴路用電只在設定了這個密碼時才產生，而且加密後才發布
-          EMS_ROOMS_PASSWORD: ${{ secrets.EMS_ROOMS_PASSWORD }}
         run: python build_ems_live.py
       - name: 發布到 ems-live 分支
         env:

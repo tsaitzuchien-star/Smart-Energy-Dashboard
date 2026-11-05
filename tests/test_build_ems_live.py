@@ -67,11 +67,3 @@ def test_circuit_stats():
     assert st["ELB1A_1"] == [4.0, 11.0, 21.0]
     assert st["R1B_20"] == [None, 4.0, 14.0]        # 最後一段倒退 → 即時 kW 為 None
 
-
-def test_encrypt_roundtrip():
-    import base64, hashlib, json
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    e = b.encrypt_json({"a": 1}, "pw", iterations=1000)
-    key = hashlib.pbkdf2_hmac("sha256", b"pw", base64.b64decode(e["salt"]), 1000, dklen=32)
-    pt = AESGCM(key).decrypt(base64.b64decode(e["iv"]), base64.b64decode(e["ct"]), None)
-    assert json.loads(pt) == {"a": 1}

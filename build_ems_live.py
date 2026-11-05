@@ -1,8 +1,8 @@
 """把監控電腦每 15 分鐘匯出的全園區度數（BMS自動匯出/Circuit_YYYY-MM-DD.csv）整理成
 ctic-ems-dashboard 網站用的公開總覽 live.json。
 
-只輸出園區層級的彙總（總需量、各樓層、各用途、空調主機房設備），不輸出個別迴路或房間，
-因為網站是公開的，而房間與迴路的對照表也公開在網站上。
+live.json 是園區層級的彙總（總需量、各樓層、各用途、空調主機房設備）；
+rooms.json 是各分路的 [最近15分kW, 今日kWh, 本月kWh]，給網站的房間卡片用（依園區決定公開，不加密）。
 
 來源檔：circuit_export.py 每列一個時間點、每欄一個 InTouch 累積度數標籤（kWh）。
 兩列相減 ÷ 分鐘數 × 60 ＝ 該時段平均 kW。
@@ -166,7 +166,7 @@ def build(rows, forecast=None, now=None):
     }
 
 
-# ---------------- 各迴路（給房間卡片，加密後才發布） ----------------
+# ---------------- 各迴路（給房間卡片） ----------------
 CIRCUIT_KEY_RE = re.compile(r"^F\d_(?:G_P1|[A-Z]\dP\d)_(.+?)_B\d+_KWH_(\d+)$")
 
 
@@ -202,18 +202,6 @@ def circuit_stats(rows, month_first=None):
         kw = kw_last.get(tag)
         out[key] = [round(kw, 2) if kw is not None else None, diff(day0.get(tag), v), diff(month0.get(tag), v)]
     return out
-
-
-def encrypt_json(obj, password, iterations=200_000):
-    """AES-256-GCM，金鑰由 PBKDF2-SHA256(password) 產生；瀏覽器用 WebCrypto 解。"""
-    import base64
-    import hashlib
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    salt, iv = os.urandom(16), os.urandom(12)
-    key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations, dklen=32)
-    ct = AESGCM(key).encrypt(iv, json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), None)
-    b64 = lambda b: base64.b64encode(b).decode()
-    return {"v": 1, "kdf": "PBKDF2-SHA256", "iter": iterations, "salt": b64(salt), "iv": b64(iv), "ct": b64(ct)}
 
 
 def diagnostics(rows):
@@ -313,16 +301,11 @@ def main():
     os.makedirs("out", exist_ok=True)
     with open("out/live.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-    password = os.environ.get("EMS_ROOMS_PASSWORD", "")
-    if password:
-        today_rows = [(t, v) for t, v in rows if t.date() == now.date()] or rows
-        stats = circuit_stats(today_rows, fetch_month_first(creds, now.date()))
-        payload = {"updated": data["updated"], "circuits": stats}
-        with open("out/rooms.enc.json", "w", encoding="utf-8") as f:
-            json.dump(encrypt_json(payload, password), f, separators=(",", ":"))
-        print(f"rooms.enc.json：{len(stats)} 個迴路（已加密）")
-    else:
-        print("未設定 EMS_ROOMS_PASSWORD，不產生房間資料")
+    today_rows = [(t, v) for t, v in rows if t.date() == now.date()] or rows
+    stats = circuit_stats(today_rows, fetch_month_first(creds, now.date()))
+    with open("out/rooms.json", "w", encoding="utf-8") as f:
+        json.dump({"updated": data["updated"], "circuits": stats}, f, separators=(",", ":"))
+    print(f"rooms.json：{len(stats)} 個迴路")
     print(f"live.json：更新 {data['updated']}，最近 15 分 {data['last15_kw']} kW，"
           f"今日最高 {data['today_peak_kw']} kW @ {data['today_peak_at']}，{len(data['times'])} 個時段")
 
