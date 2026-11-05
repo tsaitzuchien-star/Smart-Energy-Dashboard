@@ -1,0 +1,253 @@
+"""把監控電腦每 15 分鐘匯出的全園區度數（BMS自動匯出/Circuit_YYYY-MM-DD.csv）整理成
+ctic-ems-dashboard 網站用的公開總覽 live.json。
+
+只輸出園區層級的彙總（總需量、各樓層、各用途、空調主機房設備），不輸出個別迴路或房間，
+因為網站是公開的，而房間與迴路的對照表也公開在網站上。
+
+來源檔：circuit_export.py 每列一個時間點、每欄一個 InTouch 累積度數標籤（kWh）。
+兩列相減 ÷ 分鐘數 × 60 ＝ 該時段平均 kW。
+"""
+import csv
+import io
+import json
+import os
+import re
+import sys
+from collections import defaultdict
+from datetime import date, datetime, timedelta
+
+from forecast import tou_period, _PERIOD_LIMIT
+
+SHEET_ID = "1NZ0OPky-I-oWXfFTeVR8qpFT1pFBwQvRoSerJYJJMwY"
+COMPARE_TAB = "預測與實測比對"
+MAIN_KW = "F0_B2P2_MCB_KW_PV"        # 總表即時 kW（BMS 畫面那顆）
+MAIN_KWH = "F0_B2P2_MCB_KWH"         # 總表累積度數（＝DataLogger KmTagx020，比 BMS 即時值高約 10 kW）
+PLANT_FEEDER = "F0_B2P2_ACB2_1_KWH"  # 低壓總盤到空調主機房的饋線（＝EACMP_1＋ACMP_2＋ACMP_G1）
+METER_OFFSET_KW = 10.0               # 預測模型以 BMS 為準，顯示時加回，與總表、台電同基準
+
+# 空調主機房（B1 B1P2 盤）設備：只列實際設備，不列上層彙總（ACMP_1、ACMP_B…），避免重複
+PLANT = {
+    "ACMP_A_CHU1": "冰水主機 CHU-1",
+    "EACMP_1_CHU2": "冰水主機 CHU-2",
+    "ACMP_B_BCU1": "滷水主機 BCU-1（儲冰）",
+    "ACMP_1_CHP1": "冰水泵 CHP-1", "ACMP_1_CHP2": "冰水泵 CHP-2",
+    "EACMP_1_CHP3": "冰水泵 CHP-3", "EACMP_1_CHP4": "冰水泵 CHP-4",
+    "ACMP_1_CWP1": "冷卻水泵 CWP-1", "ACMP_1_CWP2": "冷卻水泵 CWP-2",
+    "EACMP_1_CWP3": "冷卻水泵 CWP-3", "EACMP_1_CWP4": "冷卻水泵 CWP-4",
+    "ACMP_B_CWP5": "冷卻水泵 CWP-5", "ACMP_B_CWP6": "冷卻水泵 CWP-6",
+    "ACMP_B_BP1": "滷水泵 BP-1", "ACMP_B_BP2": "滷水泵 BP-2",
+    "ACMP_1_BP5": "滷水泵 BP-5", "ACMP_1_BP6": "滷水泵 BP-6",
+}
+FLOOR_NAME = {"F0": "B1", "F1": "1F", "F2": "2F", "F3": "3F", "F4": "4F"}
+CIRCUIT_RE = re.compile(r"^(F\d)_([A-Z0-9]+)_(.+?)_B\d+_KWH_\d+$")
+PANEL_IN_RE = re.compile(r"^(F[1-4])_([A-Z]\dP1|G_P1)_(.+?)_I1_KWH$")   # 1–4F 各盤進線電表
+
+
+def category(panel):
+    """盤名 → 用途。E 開頭是緊急電源盤，用途同去掉 E 的盤。"""
+    p = panel[1:] if panel.startswith("E") and not panel.startswith("EACMP") else panel
+    if p.startswith("LPV") or p.startswith("MLPV"):
+        return "其他"
+    if p.startswith("L"):
+        return "照明"
+    if p.startswith("R"):
+        return "插座"
+    if p.startswith("SP"):
+        return "空調箱"
+    if p.startswith("P"):
+        return "動力"
+    return "其他"
+
+
+# ---------------- 讀檔與計算 ----------------
+def parse_wide(text):
+    """Circuit CSV → [(datetime, {tag: kWh})]，空值略過。"""
+    rows = []
+    reader = csv.reader(io.StringIO(text.lstrip("﻿")))
+    head = next(reader, None)
+    if not head:
+        return rows
+    for r in reader:
+        try:
+            ts = datetime.strptime(r[0][:19], "%Y/%m/%d %H:%M:%S")
+        except (ValueError, IndexError):
+            continue
+        vals = {}
+        for tag, v in zip(head[1:], r[1:]):
+            if v:
+                try:
+                    vals[tag] = float(v)
+                except ValueError:
+                    pass
+        rows.append((ts, vals))
+    rows.sort(key=lambda x: x[0])
+    return rows
+
+
+def kw_between(a, b, mins, max_kw=2000):
+    """兩個累積讀值 → 平均 kW；倒退、跳表或超過上限回傳 None。"""
+    if a is None or b is None:
+        return None
+    kw = (b - a) / mins * 60
+    if kw < -0.05 or kw > max_kw:
+        return None
+    return max(kw, 0.0)
+
+
+def intervals(rows):
+    """相鄰兩列 → [(區間起點, {tag: kW})]，只收 10–20 分鐘間隔。"""
+    out = []
+    for (t0, v0), (t1, v1) in zip(rows, rows[1:]):
+        mins = (t1 - t0).total_seconds() / 60
+        if not 10 <= mins <= 20:
+            continue
+        out.append((t0, {k: kw for k in v1 if (kw := kw_between(v0.get(k), v1[k], mins)) is not None}))
+    return out
+
+
+def aggregate(kw):
+    """單一時段各標籤 kW → 彙總。"""
+    floors, cats, plant = defaultdict(float), defaultdict(float), {}
+    for tag, v in kw.items():
+        m = PANEL_IN_RE.match(tag)
+        if m:
+            floors[FLOOR_NAME[m.group(1)]] += v
+            cats[category(m.group(3))] += v
+            continue
+        m = CIRCUIT_RE.match(tag)
+        if m and m.group(1) == "F0":           # B1 沒有進線電表，用各分路加總
+            floors["B1"] += v
+            cats[category(m.group(3))] += v
+    for key, name in PLANT.items():
+        tag = f"F0_B1P2_{key}_KWH"
+        if tag in kw:
+            plant[name] = kw[tag]
+    total = kw.get(MAIN_KWH)
+    feeders = {}
+    if total is not None and PLANT_FEEDER in kw:
+        feeders = {"空調主機房": kw[PLANT_FEEDER], "其他用電": max(total - kw[PLANT_FEEDER], 0.0)}
+    return {"total": total, "floors": dict(floors), "cats": dict(cats), "plant": plant, "feeders": feeders}
+
+
+def build(rows, forecast=None, now=None):
+    now = now or datetime.utcnow() + timedelta(hours=8)
+    today = now.date()
+    iv = [(t, aggregate(kw)) for t, kw in intervals(rows) if t.date() == today]
+    last_t, last_v = rows[-1] if rows else (None, {})
+    hour = (last_t or now).hour
+    period = tou_period(today, hour)
+    limit = _PERIOD_LIMIT[period]
+    latest = iv[-1][1] if iv else {"total": None, "floors": {}, "cats": {}, "plant": {}, "feeders": {}}
+    totals = [a["total"] for _, a in iv if a["total"] is not None]
+    peak = max(((a["total"], t) for t, a in iv if a["total"] is not None), default=(None, None))
+
+    def series(key):
+        names = sorted({n for _, a in iv for n in a[key]})
+        return {n: [round(a[key].get(n, 0.0), 1) for _, a in iv] for n in names}
+
+    return {
+        "updated": (last_t or now).strftime("%Y-%m-%d %H:%M"),
+        "generated": now.strftime("%Y-%m-%d %H:%M"),
+        "now_kw": round(last_v[MAIN_KW], 1) if MAIN_KW in last_v else None,
+        "last15_kw": round(latest["total"], 1) if latest["total"] is not None else None,
+        "period": period,
+        "limit_kw": limit,
+        "today_peak_kw": round(peak[0], 1) if peak[0] is not None else None,
+        "today_peak_at": peak[1].strftime("%H:%M") if peak[1] else None,
+        "today_kwh": round(sum(totals) / 4, 0) if totals else None,
+        "times": [t.strftime("%H:%M") for t, _ in iv],
+        "total": [round(a["total"], 1) if a["total"] is not None else None for _, a in iv],
+        "floors": series("floors"),
+        "cats": series("cats"),
+        "feeders": series("feeders"),
+        "plant_now": {k: round(v, 1) for k, v in sorted(latest["plant"].items(), key=lambda x: -x[1])},
+        "forecast": forecast or {},
+        "limits": {p: v for p, v in _PERIOD_LIMIT.items()},
+    }
+
+
+def diagnostics(rows):
+    """只印彙總檢查（公開 log 不印個別迴路）。"""
+    iv = intervals(rows)
+    print(f"讀值 {len(rows)} 列，可算區間 {len(iv)} 個")
+    if not iv:
+        return
+    t, kw = iv[-1]
+    a = aggregate(kw)
+    print(f"最後區間 {t:%H:%M}：總表 {a['total']}；樓層合計 {sum(a['floors'].values()):.1f}；"
+          f"用途合計 {sum(a['cats'].values()):.1f}；主機房設備合計 {sum(a['plant'].values()):.1f}")
+    print("樓層", {k: round(v, 1) for k, v in a["floors"].items()})
+    print("用途", {k: round(v, 1) for k, v in a["cats"].items()})
+    acb = {k: round(v, 1) for k, v in kw.items() if k.startswith("F0_B2P2_") and k.endswith("_KWH")}
+    print("B2P2 低壓總盤各饋線", acb)
+    parents = {k: round(v, 1) for k, v in kw.items()
+               if re.match(r"F0_B1P2_E?ACMP_[A-Z0-9]+_KWH$", k) or k == "F0_B1P2_ACMP_G1_KWH"}
+    print("主機房上層彙總", parents)
+
+
+# ---------------- Google 存取 ----------------
+def _creds():
+    from google.oauth2.service_account import Credentials
+    info = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+    return Credentials.from_service_account_info(info, scopes=[
+        "https://www.googleapis.com/auth/spreadsheets.readonly",
+        "https://www.googleapis.com/auth/drive.readonly"])
+
+
+def fetch_circuit_files(creds, days):
+    from google.auth.transport.requests import AuthorizedSession
+    s = AuthorizedSession(creds)
+    texts = []
+    for d in days:
+        name = f"Circuit_{d.isoformat()}.csv"
+        r = s.get("https://www.googleapis.com/drive/v3/files",
+                  params={"q": f"name = '{name}' and trashed = false",
+                          "fields": "files(id,name,modifiedTime)", "orderBy": "modifiedTime desc",
+                          "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"})
+        r.raise_for_status()
+        files = r.json().get("files", [])
+        if not files:
+            continue
+        c = s.get(f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}", params={"alt": "media"})
+        c.raise_for_status()
+        texts.append(c.content.decode("utf-8-sig", errors="replace"))
+    return texts
+
+
+def fetch_forecast(creds, d):
+    """今天的逐時預測 {"HH:00": kW}；讀不到回傳 {}。"""
+    try:
+        import gspread
+        ws = gspread.authorize(creds).open_by_key(SHEET_ID).worksheet(COMPARE_TAB)
+        out = {}
+        for r in ws.get_values("A2:F"):
+            if len(r) >= 6 and r[0] == d.isoformat():
+                try:
+                    out[f"{int(str(r[1]).split(':')[0]):02d}:00"] = round(float(r[5]) + METER_OFFSET_KW, 1)
+                except ValueError:
+                    pass
+        return out
+    except Exception as e:                      # 預測只是輔助，失敗不影響總覽
+        print(f"讀預測失敗：{e}")
+        return {}
+
+
+def main():
+    now = datetime.utcnow() + timedelta(hours=8)
+    creds = _creds()
+    texts = fetch_circuit_files(creds, [now.date() - timedelta(days=1), now.date()])
+    rows = sorted({t: v for text in texts for t, v in parse_wide(text)}.items())
+    if not rows:
+        print("找不到 Circuit_*.csv")
+        sys.exit(1)
+    diagnostics(rows)
+    data = build(rows, fetch_forecast(creds, now.date()), now)
+    os.makedirs("out", exist_ok=True)
+    with open("out/live.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    print(f"live.json：更新 {data['updated']}，最近 15 分 {data['last15_kw']} kW，"
+          f"今日最高 {data['today_peak_kw']} kW @ {data['today_peak_at']}，{len(data['times'])} 個時段")
+
+
+if __name__ == "__main__":
+    main()
