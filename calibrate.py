@@ -2,7 +2,7 @@
 
 流程
 1. 讀「實測需量」工作表（每小時最大 15 分鐘需量；空白＝監控停機，跳過）。
-2. 讀太陽能試算表（T-REC 四組 PV 每 15 分鐘功率），整理成每小時平均 PV，擬合明日 PV 預估；讀不到時略過。
+2. 讀太陽能試算表（T-REC 四組 PV 累計度數，每 15 分鐘的差×4 為功率），整理成每小時平均 PV，擬合明日 PV 預估；讀不到時略過。
 3. 向 Open-Meteo previous-runs API 取同期「前一天發布的預報」（與每天 18:00 實際拿得到的資訊一致）。
 4. 逐日滾動驗證：每一天只用它之前的資料訓練再預測，得到不偷看答案的誤差與「最壞情況」分位數。
 5. 用全部資料擬合最終係數，連同驗證結果寫入 JSON。
@@ -26,6 +26,7 @@ ACTUAL_TAB = "實測需量"
 SHEET_ID = "1NZ0OPky-I-oWXfFTeVR8qpFT1pFBwQvRoSerJYJJMwY"
 PV_SHEET_ID = "14emzrciRx4VlmAgnwEgxJXioOPpN0zJeHeLkY0am87A"   # 中創園區_太陽能發電紀錄_雲端版
 PV_TAB = "中創園區_太陽能發電紀錄"
+PV_MAX_KWH_15 = 40.0       # 單組 15 分鐘最多 40 度（裝置容量 145 kW），超過視為換表或補傳
 PV_METERS = 4              # BIPV-1、BIPV-2、斜坡PV、鋼構PV；少於 4 組回報的時刻不採用
 WX_MODEL = "ecmwf_ifs"     # 與 weather.py 線上預報同一個模型
 _OM_VARS = {"T": "temperature_2m", "RH": "relative_humidity_2m", "CC": "cloud_cover",
@@ -90,17 +91,26 @@ def pv_hourly(points):
 
 
 def parse_pv_sheet(rows):
-    """太陽能試算表（含標題列：系統名稱、紀錄時間、電壓、電流、當前功率(W)、累計度數）→ {(date, hour): kW}。"""
-    by_t = {}
+    """太陽能試算表（含標題列：系統名稱、紀錄時間、電壓、電流、當前功率(W)、累計度數）→ {(date, hour): kW}。
+    用「累計度數」相鄰 15 分鐘的差 ×4 算功率：BIPV-1 的當前功率欄長期只報 1–2 kW（實際約 55 kW），
+    四組累計度數加總則和台電帳單的太陽能度數一致。"""
+    eac = {}
     for r in rows[1:]:
-        if len(r) < 5 or not str(r[1]).strip():
+        if len(r) < 6 or not str(r[1]).strip():
             continue
         try:
-            t, w = _ts(r[1]), float(str(r[4]).replace(",", "") or 0)
+            t, e = _ts(r[1]), float(str(r[5]).replace(",", ""))
         except ValueError:
             continue
-        by_t.setdefault(t, {})[r[0]] = w
-    return pv_hourly([(t, sum(m.values()) / 1000.0) for t, m in by_t.items() if len(m) >= PV_METERS])
+        eac.setdefault(r[0], {})[t] = e
+    by_t = {}
+    for name, series in eac.items():
+        ts = sorted(series)
+        for a, b in zip(ts, ts[1:]):
+            de = series[b] - series[a]
+            if b - a == timedelta(minutes=15) and 0 <= de <= PV_MAX_KWH_15:
+                by_t.setdefault(b, {})[name] = de * 4
+    return pv_hourly([(t, sum(m.values())) for t, m in by_t.items() if len(m) >= PV_METERS])
 
 
 def parse_pv_csv(rows):

@@ -77,11 +77,14 @@ class CalibrateTests(unittest.TestCase):
                         **{v + "_previous_day1": [1.0, None] for v in calibrate._OM_VARS.values()}}}
         self.assertEqual(list(calibrate.parse_openmeteo(j)), [(date(2026, 8, 28), 11)])
 
-    def test_parse_pv_sheet_shifts_to_interval_start_and_needs_all_meters(self):
+    def test_parse_pv_sheet_uses_cumulative_energy_and_needs_all_meters(self):
         head = [["系統名稱", "紀錄時間", "V", "A", "當前功率(W)", "kWh"]]
         meters = ["BIPV-1", "BIPV-2", "斜坡PV", "鋼構PV"]
-        rows = head + [[m, f"2026-08-28 {t}", "220", "1", "10000", "1"] for m in meters for t in ("10:15:00", "10:30:00", "10:45:00", "11:00:00")]
-        rows += [[m, "2026-08-28 11:15:00", "220", "1", "10000", "1"] for m in meters[:3]]   # 少一組 → 不採用
+        times = ("10:00:00", "10:15:00", "10:30:00", "10:45:00", "11:00:00")
+        # 每組每 15 分鐘 +2.5 度 = 10 kW；當前功率欄故意填錯（BIPV-1 實際就是這樣），不能採用
+        rows = head + [[m, f"2026-08-28 {t}", "220", "1", "1000", str(100 + 2.5 * i)] for m in meters for i, t in enumerate(times)]
+        rows += [[m, "2026-08-28 11:15:00", "220", "1", "1000", "112.5"] for m in meters[:3]]   # 少一組 → 不採用
+        rows += [["BIPV-2", "2026-08-28 11:30:00", "220", "1", "1000", "999"]]                   # 跳表 → 不採用
         pv = calibrate.parse_pv_sheet(rows)
         self.assertEqual(pv, {(date(2026, 8, 28), 10): 40.0})
 
