@@ -47,3 +47,23 @@ def test_build():
     assert d["period"] == "半尖峰" and d["limit_kw"] == 516
     assert d["times"] == ["14:00", "14:15"] and d["total"] == [400, 360]
     assert d["today_kwh"] == 190
+
+
+def test_circuit_key():
+    assert b.circuit_key("F1_A1P1_EL1B_B1_KWH_10") == "EL1B_10"
+    assert b.circuit_key("F1_G_P1_SP_21_3_B1_KWH_07") == "SP_21_3_7"
+    assert b.circuit_key("F3_B1P1_EP3D_1_B_B1_KWH_02") == "EP3D_1_B_2"
+    assert b.circuit_key("F1_A1P1_EL1B_I1_KWH") is None
+
+
+def test_circuit_stats():
+    text = """DateTime,F0_A2P1_ELB1A_B1_KWH_01,F1_A1P1_R1B_B1_KWH_20
+2026/11/05 00:00:00,100,50
+2026/11/05 14:00:00,110,55
+2026/11/05 14:15:00,111,54
+"""
+    rows = b.parse_wide(text)
+    st = b.circuit_stats(rows, {"F0_A2P1_ELB1A_B1_KWH_01": 90, "F1_A1P1_R1B_B1_KWH_20": 40})
+    assert st["ELB1A_1"] == [4.0, 11.0, 21.0]
+    assert st["R1B_20"] == [None, 4.0, 14.0]        # 最後一段倒退 → 即時 kW 為 None
+

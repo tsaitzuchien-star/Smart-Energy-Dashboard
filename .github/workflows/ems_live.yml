@@ -1,7 +1,7 @@
 name: 園區即時總覽（ctic-ems-dashboard）
 
 # 監控電腦每 15 分鐘（:01/:16/:31/:46）把全園區度數寫進 Google 雲端「BMS自動匯出」，
-# 這裡在之後幾分鐘整理成 live.json，放到本 repo 的 ems-live 分支給網站讀。
+# 這裡在之後幾分鐘整理成 live.json（園區彙總）與 rooms.json（各分路），放到本 repo 的 ems-live 分支給網站讀。
 # GitHub 排程可能延後幾分鐘到幾十分鐘，網站上會顯示資料時間。
 on:
   schedule:
@@ -36,6 +36,6 @@ jobs:
           cd out
           git init -q
           git checkout -q -b ems-live
-          git add live.json
+          git add .
           git -c user.name="ems-live-bot" -c user.email="actions@users.noreply.github.com" commit -qm "live $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ems-live

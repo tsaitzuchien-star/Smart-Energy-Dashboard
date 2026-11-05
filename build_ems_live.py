@@ -1,8 +1,8 @@
 """把監控電腦每 15 分鐘匯出的全園區度數（BMS自動匯出/Circuit_YYYY-MM-DD.csv）整理成
 ctic-ems-dashboard 網站用的公開總覽 live.json。
 
-只輸出園區層級的彙總（總需量、各樓層、各用途、空調主機房設備），不輸出個別迴路或房間，
-因為網站是公開的，而房間與迴路的對照表也公開在網站上。
+live.json 是園區層級的彙總（總需量、各樓層、各用途、空調主機房設備）；
+rooms.json 是各分路的 [最近15分kW, 今日kWh, 本月kWh]，給網站的房間卡片用（依園區決定公開，不加密）。
 
 來源檔：circuit_export.py 每列一個時間點、每欄一個 InTouch 累積度數標籤（kWh）。
 兩列相減 ÷ 分鐘數 × 60 ＝ 該時段平均 kW。
@@ -166,6 +166,44 @@ def build(rows, forecast=None, now=None):
     }
 
 
+# ---------------- 各迴路（給房間卡片） ----------------
+CIRCUIT_KEY_RE = re.compile(r"^F\d_(?:G_P1|[A-Z]\dP\d)_(.+?)_B\d+_KWH_(\d+)$")
+
+
+def circuit_key(tag):
+    """F1_A1P1_EL1B_B1_KWH_10 → "EL1B_10"（網站用 盤名_迴路，盤名的 - 換成 _）。"""
+    m = CIRCUIT_KEY_RE.match(tag)
+    return f"{m.group(1)}_{int(m.group(2))}" if m else None
+
+
+def circuit_stats(rows, month_first=None):
+    """各迴路 {key: [最近15分kW, 今日kWh, 本月kWh]}；讀不到或倒退的給 None。
+
+    今日＝最後讀值－今天第一筆；本月＝最後讀值－本月第一筆（month_first 是本月第一列的讀值）。
+    """
+    if not rows:
+        return {}
+    last_t, last = rows[-1]
+    day0 = next((v for t, v in rows if t.date() == last_t.date()), {})
+    month0 = month_first or next((v for t, v in rows if t.month == last_t.month and t.year == last_t.year), {})
+    iv = intervals(rows)
+    kw_last = iv[-1][1] if iv and iv[-1][0] + timedelta(minutes=20) >= last_t else {}
+
+    def diff(a, b):
+        if a is None or b is None or b < a - 0.05:
+            return None
+        return round(max(b - a, 0.0), 1)
+
+    out = {}
+    for tag, v in last.items():
+        key = circuit_key(tag)
+        if not key:
+            continue
+        kw = kw_last.get(tag)
+        out[key] = [round(kw, 2) if kw is not None else None, diff(day0.get(tag), v), diff(month0.get(tag), v)]
+    return out
+
+
 def diagnostics(rows):
     """只印彙總檢查（公開 log 不印個別迴路）。"""
     iv = intervals(rows)
@@ -214,6 +252,24 @@ def fetch_circuit_files(creds, days):
     return texts
 
 
+def fetch_month_first(creds, d):
+    """本月最早一個 Circuit 檔的第一列讀值；沒有回傳 None。"""
+    from google.auth.transport.requests import AuthorizedSession
+    s = AuthorizedSession(creds)
+    r = s.get("https://www.googleapis.com/drive/v3/files",
+              params={"q": f"name contains 'Circuit_{d:%Y-%m}-' and trashed = false",
+                      "fields": "files(id,name)", "orderBy": "name", "pageSize": 1,
+                      "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"})
+    r.raise_for_status()
+    files = r.json().get("files", [])
+    if not files:
+        return None
+    c = s.get(f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}", params={"alt": "media"})
+    c.raise_for_status()
+    rows = parse_wide(c.content.decode("utf-8-sig", errors="replace"))
+    return rows[0][1] if rows else None
+
+
 def fetch_forecast(creds, d):
     """今天的逐時預測 {"HH:00": kW}；讀不到回傳 {}。"""
     try:
@@ -245,6 +301,11 @@ def main():
     os.makedirs("out", exist_ok=True)
     with open("out/live.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    today_rows = [(t, v) for t, v in rows if t.date() == now.date()] or rows
+    stats = circuit_stats(today_rows, fetch_month_first(creds, now.date()))
+    with open("out/rooms.json", "w", encoding="utf-8") as f:
+        json.dump({"updated": data["updated"], "circuits": stats}, f, separators=(",", ":"))
+    print(f"rooms.json：{len(stats)} 個迴路")
     print(f"live.json：更新 {data['updated']}，最近 15 分 {data['last15_kw']} kW，"
           f"今日最高 {data['today_peak_kw']} kW @ {data['today_peak_at']}，{len(data['times'])} 個時段")
 
