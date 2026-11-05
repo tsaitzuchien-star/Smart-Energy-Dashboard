@@ -24,10 +24,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - run: pip install requests gspread google-auth
+      - run: pip install requests gspread google-auth cryptography
       - name: 整理 live.json
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          # 房間／迴路用電只在設定了這個密碼時才產生，而且加密後才發布
+          EMS_ROOMS_PASSWORD: ${{ secrets.EMS_ROOMS_PASSWORD }}
         run: python build_ems_live.py
       - name: 發布到 ems-live 分支
         env:
@@ -36,6 +38,6 @@ jobs:
           cd out
           git init -q
           git checkout -q -b ems-live
-          git add live.json
+          git add .
           git -c user.name="ems-live-bot" -c user.email="actions@users.noreply.github.com" commit -qm "live $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ems-live
