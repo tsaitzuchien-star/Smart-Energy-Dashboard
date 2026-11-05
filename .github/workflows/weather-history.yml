@@ -17,7 +17,19 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install requests
-      - run: python tools/fetch_weather_history.py 2026-06-01 2026-10-05 /tmp/wx
+      - name: ERA5 2021-08 → now (temperature, humidity) for the AC savings baseline
+        run: |
+          mkdir -p /tmp/wx
+          python - <<'PY'
+          import requests, json, sys
+          sys.path.insert(0, 'tools')
+          from fetch_weather_history import LAT, LON
+          u = ("https://archive-api.open-meteo.com/v1/archive?latitude=%s&longitude=%s&start_date=2021-08-01&end_date=2026-11-05"
+               "&hourly=temperature_2m,relative_humidity_2m,shortwave_radiation&timezone=Asia%%2FTaipei" % (LAT, LON))
+          r = requests.get(u, timeout=300); r.raise_for_status()
+          json.dump(r.json(), open('/tmp/wx/era5_2021_2026.json', 'w'))
+          print('ok', len(r.json()['hourly']['time']))
+          PY
       - name: 結果推到 claude/weather-history-results 分支
         if: always()
         run: |
@@ -27,5 +39,5 @@ jobs:
           git rm -rfq .
           cp /tmp/wx/* .
           git add -A
-          git commit -qm "歷史氣象 2026-06-01 → 2026-10-05"
+          git commit -qm "ERA5 hourly 2021-08 → 2026-11 (AC savings baseline)"
           git push -f origin HEAD:claude/weather-history-results
