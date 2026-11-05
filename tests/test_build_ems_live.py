@@ -85,3 +85,17 @@ def test_circuit_stats_night_and_work():
     st = b.circuit_stats(b.parse_wide(text))
     assert st["R1B_20"][3:] == [1.0, 5.0]
 
+
+
+def test_pv_summary_uses_cumulative_energy():
+    from datetime import datetime
+    rows = []
+    meters = {"BIPV-1": 0.0, "BIPV-2": 100.0, "斜坡PV": 200.0, "鋼構PV": 300.0}
+    for i, t in enumerate(["2026-10-31 23:45:00", "2026-11-05 10:00:00", "2026-11-05 10:15:00", "2026-11-05 10:30:00"]):
+        for name, base in meters.items():
+            rows.append([name, t, "230", "1", "5", str(base + i * 10)])   # 每支每段 +10 度
+    pv = b.pv_summary(rows, datetime(2026, 11, 5, 10, 40))
+    assert pv["series"] == {"10:00": 160.0, "10:15": 160.0}        # 4 支 × 10 度 × 4
+    assert pv["now_kw"] == 160.0 and pv["updated"] == "2026-11-05 10:30"
+    assert pv["today_kwh"] == 80.0                                  # 今天兩段 × 4 支 × 10
+    assert pv["month_kwh"] == 80.0                                  # 10/31 不算本月

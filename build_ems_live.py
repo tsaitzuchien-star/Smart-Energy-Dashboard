@@ -304,6 +304,69 @@ def fetch_month_first(creds, d):
     return rows[0][1] if rows else None
 
 
+# ---------------- 太陽能（T-REC 機器人寫入的試算表） ----------------
+PV_SHEET_ID = "14emzrciRx4VlmAgnwEgxJXioOPpN0zJeHeLkY0am87A"   # 中創園區_太陽能發電紀錄_雲端版
+PV_TAB = "中創園區_太陽能發電紀錄"
+PV_METERS = 4
+PV_TAIL_ROWS = 13000      # 4 支電表 × 96 筆／天，約 34 天
+
+
+def pv_summary(rows, now):
+    """rows：[系統名稱, 紀錄時間, V, A, W, 累計度數]。用「累計度數」差算 kW 與度數
+    （BIPV-1 的當前功率欄只回報部分容量，累計度數才和台電帳單的太陽能度數一致）。
+    紀錄時間是 15 分鐘區間的結束時刻，series 以區間開始時刻為鍵，對齊總表的時間軸。"""
+    by_meter = defaultdict(dict)
+    for r in rows:
+        if len(r) < 6:
+            continue
+        try:
+            t = datetime.strptime(str(r[1]).strip()[:16], "%Y-%m-%d %H:%M")
+            e = float(str(r[5]).replace(",", ""))
+        except ValueError:
+            continue
+        by_meter[r[0]][t] = e
+    if len(by_meter) < PV_METERS:
+        return None
+    today, month0 = now.date(), now.date().replace(day=1)
+
+    def energy_since(start):
+        tot = 0.0
+        for pts in by_meter.values():
+            ts = [t for t in pts if t.date() >= start and t <= now]
+            if not ts:
+                return None
+            tot += max(pts[max(ts)] - pts[min(ts)], 0.0)
+        return tot
+
+    common = sorted(set.intersection(*(set(p) for p in by_meter.values())))
+    series = {}
+    for a, b in zip(common, common[1:]):
+        if b.date() != today or (b - a) != timedelta(minutes=15):
+            continue
+        kw = sum(max(p[b] - p[a], 0.0) for p in by_meter.values()) * 4
+        series[(a).strftime("%H:%M")] = round(kw, 1)
+    last = common[-1] if common else None
+    return {
+        "updated": last.strftime("%Y-%m-%d %H:%M") if last else None,
+        "now_kw": list(series.values())[-1] if series else None,
+        "today_kwh": round(energy_since(today) or 0.0, 1),
+        "month_kwh": round(energy_since(month0) or 0.0, 0),
+        "series": series,
+    }
+
+
+def fetch_pv(creds, now):
+    """讀不到就回傳 None，總覽照常更新。"""
+    try:
+        import gspread
+        ws = gspread.authorize(creds).open_by_key(PV_SHEET_ID).worksheet(PV_TAB)
+        n = ws.row_count
+        return pv_summary(ws.get_values(f"A{max(2, n - PV_TAIL_ROWS)}:F{n}"), now)
+    except Exception as e:                      # noqa: BLE001 — 太陽能是輔助資訊
+        print(f"讀太陽能失敗：{e}")
+        return None
+
+
 def fetch_forecast(creds, d):
     """今天的逐時預測 {"HH:00": kW}；讀不到回傳 {}。"""
     try:
@@ -332,6 +395,7 @@ def main():
         sys.exit(1)
     diagnostics(rows)
     data = build(rows, fetch_forecast(creds, now.date()), now)
+    data["pv"] = fetch_pv(creds, now)
     os.makedirs("out", exist_ok=True)
     with open("out/live.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
