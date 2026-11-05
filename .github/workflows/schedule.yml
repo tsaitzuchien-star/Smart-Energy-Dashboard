@@ -24,6 +24,13 @@ jobs:
         run: |
           pip install requests urllib3 gspread google-auth
           
+      # 先把監控電腦匯到 Google 雲端的總表電表資料補進「實測需量」「每日實測摘要」；失敗不影響當天預測
+      - name: ⚡ 匯入總表實測（BMS自動匯出）
+        continue-on-error: true
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python ingest_meter.py
+
       - name: 🚀 執行自動寫入腳本
         env:
           # 這裡會去抓我們等一下要在 GitHub 後台設定的隱藏金鑰
