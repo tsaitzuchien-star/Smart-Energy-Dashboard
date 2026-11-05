@@ -64,6 +64,19 @@ def test_circuit_stats():
 """
     rows = b.parse_wide(text)
     st = b.circuit_stats(rows, {"F0_A2P1_ELB1A_B1_KWH_01": 90, "F1_A1P1_R1B_B1_KWH_20": 40})
-    assert st["ELB1A_1"] == [4.0, 11.0, 21.0]
-    assert st["R1B_20"] == [None, 4.0, 14.0]        # 最後一段倒退 → 即時 kW 為 None
+    assert st["ELB1A_1"] == [4.0, 11.0, 21.0, None, None]   # 夜間/上班時段資料不足 → None
+    assert st["R1B_20"] == [None, 4.0, 14.0, None, None]    # 最後一段倒退 → 即時 kW 為 None
+
+
+def test_circuit_stats_night_and_work():
+    # 11/4（三）00:00–06:00 用 6 kWh → 夜間 1 kW；09:00–17:00 用 40 kWh → 上班 5 kW
+    text = """DateTime,F1_A1P1_R1B_B1_KWH_20
+2026/11/04 00:00:00,100
+2026/11/04 06:00:00,106
+2026/11/04 09:00:00,110
+2026/11/04 17:00:00,150
+2026/11/04 17:15:00,151
+"""
+    st = b.circuit_stats(b.parse_wide(text))
+    assert st["R1B_20"][3:] == [1.0, 5.0]
 
