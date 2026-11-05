@@ -1,6 +1,6 @@
 name: 園區歷史月用電（ctic-ems-dashboard）
 
-# 每天把中創服務部「園區空間每月用電表」整理成 monthly.json，放到 ems-monthly 分支給網站讀。
+# 每天把中創服務部「園區空間每月用電表」整理成 monthly.json、南區用電資料.xlsx 中創台電帳單整理成 bill.json，放到 ems-monthly 分支給網站讀。
 # 試算表要以「檢視者」共用給服務帳號；同仁每月更新後，隔天網站就會跟著更新。
 on:
   schedule:
@@ -23,11 +23,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - run: pip install requests gspread google-auth
+      - run: pip install requests gspread google-auth openpyxl
       - name: 整理 monthly.json
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: python build_ems_monthly.py
+      - name: 整理 bill.json（台電帳單＋填寫檢查）
+        continue-on-error: true      # 帳單檔讀不到時，monthly.json 照常發布
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python build_ems_bill.py
       - name: 發布到 ems-monthly 分支
         env:
           TOKEN: ${{ github.token }}
@@ -35,6 +40,6 @@ jobs:
           cd out
           git init -q
           git checkout -q -b ems-monthly
-          git add monthly.json
+          git add monthly.json $(ls bill.json 2>/dev/null)
           git -c user.name="ems-monthly-bot" -c user.email="actions@users.noreply.github.com" commit -qm "monthly $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ems-monthly
