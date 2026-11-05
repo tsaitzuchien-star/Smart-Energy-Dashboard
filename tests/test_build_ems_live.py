@@ -2,10 +2,10 @@ from datetime import datetime
 
 import build_ems_live as b
 
-CSV = """DateTime,F0_B2P2_MCB_KW_PV,F0_B2P2_MCB_KWH,F1_A1P1_L1B_I1_KWH,F1_A1P1_ESP_11_1_I1_KWH,F0_A2P1_ELB1A_B1_KWH_01,F0_B1P2_ACMP_A_CHU1_KWH
-2026/11/05 14:00:00,330,1000,10,20,5,100
-2026/11/05 14:15:00,335,1100,12,25,6,130
-2026/11/05 14:30:00,340,1190,,30,7,130
+CSV = """DateTime,F0_B2P2_MCB_KW_PV,F0_B2P2_MCB_KWH,F1_A1P1_L1B_I1_KWH,F1_A1P1_ESP_11_1_I1_KWH,F0_A2P1_ELB1A_B1_KWH_01,F0_B1P2_ACMP_A_CHU1_KWH,F0_B2P2_ACB2_1_KWH
+2026/11/05 14:00:00,330,1000,10,20,5,100,50
+2026/11/05 14:15:00,335,1100,12,25,6,130,100
+2026/11/05 14:30:00,340,1190,,30,7,130,140
 """
 
 
@@ -25,6 +25,7 @@ def test_aggregate_categories():
     assert a["floors"] == {"1F": 28.0, "B1": 4.0}
     assert a["cats"] == {"照明": 12.0, "空調箱": 20.0}
     assert a["plant"] == {"冰水主機 CHU-1": 120.0}
+    assert a["feeders"] == {"空調主機房": 200.0, "其他用電": 200.0}
 
 
 def test_category():

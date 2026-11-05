@@ -21,7 +21,9 @@ from forecast import tou_period, _PERIOD_LIMIT
 SHEET_ID = "1NZ0OPky-I-oWXfFTeVR8qpFT1pFBwQvRoSerJYJJMwY"
 COMPARE_TAB = "預測與實測比對"
 MAIN_KW = "F0_B2P2_MCB_KW_PV"        # 總表即時 kW（BMS 畫面那顆）
-MAIN_KWH = "F0_B2P2_MCB_KWH"         # 總表累積度數
+MAIN_KWH = "F0_B2P2_MCB_KWH"         # 總表累積度數（＝DataLogger KmTagx020，比 BMS 即時值高約 10 kW）
+PLANT_FEEDER = "F0_B2P2_ACB2_1_KWH"  # 低壓總盤到空調主機房的饋線（＝EACMP_1＋ACMP_2＋ACMP_G1）
+METER_OFFSET_KW = 10.0               # 預測模型以 BMS 為準，顯示時加回，與總表、台電同基準
 
 # 空調主機房（B1 B1P2 盤）設備：只列實際設備，不列上層彙總（ACMP_1、ACMP_B…），避免重複
 PLANT = {
@@ -121,7 +123,10 @@ def aggregate(kw):
         if tag in kw:
             plant[name] = kw[tag]
     total = kw.get(MAIN_KWH)
-    return {"total": total, "floors": dict(floors), "cats": dict(cats), "plant": plant}
+    feeders = {}
+    if total is not None and PLANT_FEEDER in kw:
+        feeders = {"空調主機房": kw[PLANT_FEEDER], "其他用電": max(total - kw[PLANT_FEEDER], 0.0)}
+    return {"total": total, "floors": dict(floors), "cats": dict(cats), "plant": plant, "feeders": feeders}
 
 
 def build(rows, forecast=None, now=None):
@@ -132,7 +137,7 @@ def build(rows, forecast=None, now=None):
     hour = (last_t or now).hour
     period = tou_period(today, hour)
     limit = _PERIOD_LIMIT[period]
-    latest = iv[-1][1] if iv else {"total": None, "floors": {}, "cats": {}, "plant": {}}
+    latest = iv[-1][1] if iv else {"total": None, "floors": {}, "cats": {}, "plant": {}, "feeders": {}}
     totals = [a["total"] for _, a in iv if a["total"] is not None]
     peak = max(((a["total"], t) for t, a in iv if a["total"] is not None), default=(None, None))
 
@@ -154,6 +159,7 @@ def build(rows, forecast=None, now=None):
         "total": [round(a["total"], 1) if a["total"] is not None else None for _, a in iv],
         "floors": series("floors"),
         "cats": series("cats"),
+        "feeders": series("feeders"),
         "plant_now": {k: round(v, 1) for k, v in sorted(latest["plant"].items(), key=lambda x: -x[1])},
         "forecast": forecast or {},
         "limits": {p: v for p, v in _PERIOD_LIMIT.items()},
@@ -217,7 +223,7 @@ def fetch_forecast(creds, d):
         for r in ws.get_values("A2:F"):
             if len(r) >= 6 and r[0] == d.isoformat():
                 try:
-                    out[f"{int(str(r[1]).split(':')[0]):02d}:00"] = round(float(r[5]), 1)
+                    out[f"{int(str(r[1]).split(':')[0]):02d}:00"] = round(float(r[5]) + METER_OFFSET_KW, 1)
                 except ValueError:
                     pass
         return out
