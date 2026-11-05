@@ -1,6 +1,6 @@
 name: 園區歷史月用電（ctic-ems-dashboard）
 
-# 每天把中創服務部「園區空間每月用電表」整理成 monthly.json、南區用電資料.xlsx 中創台電帳單整理成 bill.json，放到 ems-monthly 分支給網站讀。
+# 每天把中創服務部「園區空間每月用電表」整理成 monthly.json、南區用電資料.xlsx 中創台電帳單整理成 bill.json （能源統計表補最新月份並對帳），放到 ems-monthly 分支給網站讀。
 # 試算表要以「檢視者」共用給服務帳號；同仁每月更新後，隔天網站就會跟著更新。
 on:
   schedule:
