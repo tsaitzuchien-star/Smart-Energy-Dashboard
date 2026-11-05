@@ -15,16 +15,19 @@ jobs:
         env:
           LAT: "23.936537"
           LON: "120.697917"
-          START: "2026-06-01"
-          END: "2026-11-03"
+          START: "2021-08-01"
+          END: "2026-11-05"
         run: |
           set -e
           mkdir -p out && cd out
           V=temperature_2m,relative_humidity_2m,cloud_cover,shortwave_radiation,precipitation
           P=$(echo $V | sed 's/,/_previous_day1,/g')_previous_day1
-          curl -sf --retry 3 "https://previous-runs-api.open-meteo.com/v1/forecast?latitude=$LAT&longitude=$LON&start_date=$START&end_date=$END&hourly=$P&timezone=Asia%2FTaipei&models=ecmwf_ifs" -o wx_forecast_prev_day1.json
+          curl -s --retry 3 "https://previous-runs-api.open-meteo.com/v1/forecast?latitude=$LAT&longitude=$LON&start_date=$START&end_date=$END&hourly=$P&timezone=Asia%2FTaipei&models=ecmwf_ifs" -o wx_forecast_prev_day1.json
           curl -sf --retry 3 "https://archive-api.open-meteo.com/v1/archive?latitude=$LAT&longitude=$LON&start_date=$START&end_date=$END&hourly=$V&timezone=Asia%2FTaipei" -o wx_observed_era5.json
-          curl -sf --retry 3 "https://raw.githubusercontent.com/ruyut/TaiwanCalendar/master/data/2026.json" -o calendar_2026.json
+          for y in 2021 2022 2023 2024 2025 2026; do curl -sf --retry 3 "https://raw.githubusercontent.com/ruyut/TaiwanCalendar/master/data/$y.json" -o calendar_$y.json || echo "calendar $y failed"; done
+          # 歷史預報（ecmwf_ifs，每天 00Z 之後的預報；比 previous_day1 涵蓋更早）
+          curl -s --retry 3 "https://historical-forecast-api.open-meteo.com/v1/forecast?latitude=$LAT&longitude=$LON&start_date=$START&end_date=$END&hourly=$V&timezone=Asia%2FTaipei&models=ecmwf_ifs" -o wx_hist_forecast_ifs.json || true
+          head -c 300 wx_hist_forecast_ifs.json; echo
           ls -la
       - name: 推到 claude/research-results（不進主程式）
         run: |
