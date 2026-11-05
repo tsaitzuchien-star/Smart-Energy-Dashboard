@@ -116,7 +116,7 @@ class CalibratedForecastTests(unittest.TestCase):
         self.assertEqual(len(fc["calc_tmr"]), 6)   # fake_weather 只給 6 個時段
         semi = fc["risk"]["semi"]
         self.assertEqual(semi["limit"], 516.0)
-        self.assertEqual(semi["action"], 516.0 - forecast.DL_ACTION_MARGIN)
+        self.assertEqual(semi["action"], 516.0 - forecast.BMS_TO_TAIPOWER_KW - forecast.DL_ACTION_MARGIN)
         self.assertAlmostEqual(semi["alert"], 516.0 * 0.9)
         self.assertAlmostEqual(semi["p95"] - semi["pred"], 50.0)
 

@@ -5,7 +5,7 @@ import altair as alt
 import pandas as pd
 
 from calendar_tw import load_calendar
-from forecast import ForecastInputs, compute_forecast, off_days_before, OVERTIME_ONTIME, MAG_BASE_PCT, MAG_MIN_PCT, MAG_MAX_PCT
+from forecast import ForecastInputs, compute_forecast, off_days_before, OVERTIME_ONTIME, MAG_BASE_PCT, MAG_MIN_PCT, MAG_MAX_PCT, BMS_TO_TAIPOWER_KW
 import trend
 from weather import fetch_smart_weather, TARGET_HOURS, TW_TZ
 
@@ -417,9 +417,10 @@ with tab_tonight:
             v, lim = d["h_net"], d["current_limit"]
             hour = int(h[:2])
             peak = d["period"] == "尖峰"
-            if v > lim - 15:
+            billed = v + BMS_TO_TAIPOWER_KW          # 台電電表比 BMS 高約 10 kW
+            if billed > lim - 15:
                 fill, txt = "#B3261E", "#FFFFFF"
-            elif v > lim - 50:
+            elif billed > lim - 50:
                 fill, txt = "#F2B632", "#14202B"
             else:
                 fill, txt = "#1A7F5A", "#FFFFFF"
