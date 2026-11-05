@@ -16,7 +16,11 @@ import sys
 from statistics import median
 
 BILL_FILE = "南區用電資料.xlsx"
-FY_FILE = "能源資訊統計比較_FY"   # 檔名包含這段（實際檔名是「中創圈區…」）
+FY_FILE = "能源資訊統計比較_FY"
+PV_SHEET_ID = "14emzrciRx4VlmAgnwEgxJXioOPpN0zJeHeLkY0am87A"   # 自建太陽能網站的 T-REC 紀錄（四組電表累計度數）
+PV_TAB = "中創園區_太陽能發電紀錄"
+PV_METERS = 4
+PV_MAX_KWH_15 = 40.0      # 單組每 15 分鐘最多 40 度；超過或負值＝換表、歸零，不計   # 檔名包含這段（實際檔名是「中創圈區…」）
 FY_BLOCKS = {"最大需量": ("max_kw", 1), "超約罰款": ("penalty", 1000), "流動電度": ("kwh", 1000),
              "電費": ("fee", 1000), "太陽能": ("pv", 1)}
 SITE = "中創"
@@ -132,7 +136,7 @@ def cross_check(recs, fy):
         mine = {"kwh": r["kwh"] and r["kwh"] * 1000, "fee": r["fee"] and r["fee"] * 1000, "pv": r["pv"] and r["pv"] * 1000,
                 "max_kw": max([r[d] for _, d, _ in PERIODS if r[d] is not None], default=None),
                 "penalty": sum(r[p] or 0 for _, _, p in PERIODS) * 1000}
-        for k, name, tol in [("kwh", "台電電度", 1), ("fee", "台電電費", 1), ("pv", "太陽能度數", 1),
+        for k, name, tol in [("kwh", "台電電度", 1), ("fee", "台電電費", 1),
                              ("max_kw", "最高需量", 0.5), ("penalty", "超約罰款", 1)]:
             a, b = mine[k], f.get(k)
             if a is not None and b is not None and abs(a - b) > tol:
@@ -141,7 +145,49 @@ def cross_check(recs, fy):
     return issues
 
 
-def build(rows, fy_rows=None):
+def pv_site_monthly(rows):
+    """太陽能網站（T-REC 試算表：系統名稱、紀錄時間、…、累計度數）→ {"2026/10": 度}，只收資料完整的整月。
+    每組電表相鄰兩筆累計度數相減（中間缺資料也照比例上限接受），歸零或跳表的那段不計。"""
+    import calendar
+    from datetime import datetime, timedelta
+    series = {}
+    for r in rows:
+        if len(r) < 6 or not str(r[1]).strip():
+            continue
+        try:
+            t = datetime.fromisoformat(str(r[1]).strip().replace("/", "-"))
+            e = float(str(r[5]).replace(",", ""))
+        except ValueError:
+            continue
+        series.setdefault(r[0], {})[t] = e
+    if len(series) < PV_METERS:
+        return {}
+    kwh, days = {}, {}
+    last_t = max(max(v) for v in series.values())
+    for name, ser in series.items():
+        ts = sorted(ser)
+        for a, b in zip(ts, ts[1:]):
+            de, steps = ser[b] - ser[a], (b - a) / timedelta(minutes=15)
+            m = f"{b.year}/{b.month:02d}"
+            days.setdefault((name, m), set()).add(b.day)
+            if 0 <= de <= PV_MAX_KWH_15 * max(steps, 1):
+                kwh[m] = kwh.get(m, 0.0) + de
+    out = {}
+    for m, v in kwh.items():
+        y, mo = int(m[:4]), int(m[5:])
+        ndays = calendar.monthrange(y, mo)[1]
+        month_over = (last_t.year, last_t.month) > (y, mo)
+        if month_over and all(len(days.get((n, m), ())) >= ndays * 0.9 for n in series):
+            out[m] = round(v)
+    return out
+
+
+def _prev_month(m):
+    y, mo = int(m[:4]), int(m[5:])
+    return f"{y - 1}/12" if mo == 1 else f"{y}/{mo - 1:02d}"
+
+
+def build(rows, fy_rows=None, pv_rows=None):
     recs = parse(rows)
     if len(recs) < 12:
         raise SystemExit(f"中創只有 {len(recs)} 個月，不發布")
@@ -175,7 +221,17 @@ def build(rows, fy_rows=None):
             data["max_kw"].append(f.get("max_kw"))
             data["penalty"].append(round(f.get("penalty") or 0))
         if data["fy_months"]:
-            data["source"] += f"；{'、'.join(data['fy_months'])} 先取自能源統計表（只有總用電、電費、太陽能、最高需量）"
+            data["source"] += f"；{'、'.join(data['fy_months'])} 先取自能源統計表（只有總用電、電費、最高需量）"
+    # 太陽能以自建太陽能網站為準：帳單月份 M 的太陽能＝網站上 M−1 整月的度數（2026/4 起同仁也是照抄這個數）
+    site = pv_site_monthly(pv_rows) if pv_rows else {}
+    data["pv_site"] = []
+    for i, m in enumerate(data["months"]):
+        v = site.get(_prev_month(m))
+        if v is not None:
+            data["pv"][i] = v
+            data["pv_site"].append(m)
+    if data["pv_site"]:
+        data["source"] += f"；太陽能度數以太陽能網站為準（{data['pv_site'][0]} 起）"
     return data
 
 
@@ -219,7 +275,17 @@ def fetch_rows():
             print("找不到能源統計表，略過")
     except Exception as e:  # 能源統計表只是補充，出錯不擋帳單
         print(f"能源統計表讀取失敗，略過：{e}")
-    return rows, fy_rows
+    pv_rows = None
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        creds = Credentials.from_service_account_info(json.loads(os.environ["GOOGLE_CREDENTIALS"]),
+                                                      scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+        pv_rows = gspread.authorize(creds).open_by_key(PV_SHEET_ID).worksheet(PV_TAB).get_values("A2:F")
+        print(f"太陽能網站 {len(pv_rows)} 筆")
+    except Exception as e:  # 太陽能網站讀不到時沿用帳單上填的數字
+        print(f"太陽能網站讀取失敗，沿用帳單數字：{e}")
+    return rows, fy_rows, pv_rows
 
 
 def main():
