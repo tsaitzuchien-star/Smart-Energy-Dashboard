@@ -69,3 +69,28 @@ def test_fy_sheet_adds_newer_month_and_cross_checks():
 
 def test_fy_sheet_optional():
     assert b.build(sheet(), None)["fy_months"] == []
+
+
+def pv_rows(months, per_day=10.0):
+    """四組電表，每 15 分鐘一筆；per_day 是每組每天度數。"""
+    rows, e = [], {n: 0.0 for n in ("A", "B", "C", "D")}
+    t = dt.datetime(*months[0], 1)
+    end = dt.datetime(*months[1], 1) + dt.timedelta(days=2)
+    while t < end:
+        for n in e:
+            if t.hour == 12 and t.minute == 0:
+                e[n] += per_day
+            rows.append([n, t.strftime("%Y-%m-%d %H:%M:%S"), "", "", "", str(e[n])])
+        t += dt.timedelta(minutes=15)
+    return rows
+
+
+def test_pv_from_solar_site_shifted_one_month():
+    rows = pv_rows(((2025, 10), (2025, 12)))
+    rows.append(["A", "2025-11-15 13:00:00", "", "", "", "0"])          # 歸零 → 不計，後面恢復
+    site = b.pv_site_monthly(rows)
+    assert site["2025/10"] == 31 * 40 and "2025/12" not in site       # 12 月還沒結束 → 不採用
+    d = b.build(sheet(), None, rows)
+    i = d["months"].index("2025/11")
+    assert d["pv"][i] == 31 * 40 and "2025/11" in d["pv_site"]          # 帳單 11 月 ＝ 網站 10 月
+    assert d["pv"][d["months"].index("2025/01")] == round((20 + 1 + 5) * 1000)   # 網站沒有的月份沿用帳單
