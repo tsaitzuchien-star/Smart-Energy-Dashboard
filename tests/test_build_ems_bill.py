@@ -40,3 +40,32 @@ def test_checks_flag_typos_copies_and_missing_penalty():
     assert "複製上一列" in msgs[("2024/08", "error")]
     assert "超過契約 452" in msgs[("2024/10", "error")]
     assert not any(m == "2024/11" for m, _ in msgs)
+
+
+def fy_sheet(kwh12, fy="FY114", max_kw=None, pen=None, pv=None):
+    pad = lambda v: [None] * (12 - len(v)) if len(v) < 12 else []
+    rows = [(None, "電號"), (None, None, None, None, None, "使用度數(kWh)", "一月")]
+    rows.append((None,) * 5 + (fy, *kwh12, *pad(kwh12)))                       # 度數總表（第 6 欄沒有區塊名，略過）
+    rows.append((None,) * 4 + ("最大需量\n(仟瓦)", fy, *(max_kw or [480] * len(kwh12))))
+    rows.append((None,) * 4 + ("超約罰款金額\n(仟元)", fy, *(pen or [0] * len(kwh12))))
+    rows.append((None,) * 4 + ("流動電度\n(仟度)", fy, *[k / 1000 for k in kwh12]))
+    rows.append((None,) * 4 + ("電費\n(仟元)", fy, *[900.0] * len(kwh12)))
+    rows.append((None,) * 4 + ("太陽能PV\n(度)", fy, *(pv or [20000] * len(kwh12))))
+    return rows
+
+
+def test_fy_sheet_adds_newer_month_and_cross_checks():
+    # FY114 = 2025；南區用電資料到 2025/12，這裡改成只到 2025/11 → 2025/12 由能源統計表補
+    rows = [r for r in sheet() if not (r is not b and isinstance(r[0], dt.datetime) and r[0].year == 2025 and r[0].month == 12)]
+    kwh = [180000] * 12
+    kwh[2] = 170000                                   # 2025/03 不一致
+    d = b.build(rows, fy_sheet(kwh, max_kw=[480] * 11 + [500], pv=[(25 + m) * 1000 for m in range(1, 13)]))
+    assert d["months"][-1] == "2025/12" and d["fy_months"] == ["2025/12"]
+    assert d["kwh"][-1] == 180000 and d["max_kw"][-1] == 500 and d["demand"]["半尖峰"][-1] is None
+    assert len(d["months"]) == len(d["kwh"]) == len(d["penalty"]) == len(d["demand"]["離峰"]) == len(d["max_kw"])
+    bad = [x for x in d["issues"] if "兩份不一致" in x["msg"]]
+    assert [x["month"] for x in bad] == ["2025/03"] and "台電電度" in bad[0]["msg"]
+
+
+def test_fy_sheet_optional():
+    assert b.build(sheet(), None)["fy_months"] == []
