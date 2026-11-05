@@ -99,3 +99,21 @@ def test_pv_summary_uses_cumulative_energy():
     assert pv["now_kw"] == 160.0 and pv["updated"] == "2026-11-05 10:30"
     assert pv["today_kwh"] == 80.0                                  # 今天兩段 × 4 支 × 10
     assert pv["month_kwh"] == 80.0                                  # 10/31 不算本月
+
+
+def test_ice_runs_span_midnight_and_mag_today():
+    from datetime import timedelta
+    t0 = datetime(2026, 7, 6, 23, 0)
+    iv = []
+    for i in range(36):                      # 23:00 → 08:00
+        t = t0 + timedelta(minutes=15 * i)
+        on = datetime(2026, 7, 7, 3, 15) <= t < datetime(2026, 7, 7, 7, 0)
+        iv.append((t, {b.BCU_TAG: 240.0 if on else 0.4, b.MAG_TAG: 120.0 if t.hour >= 7 else 0.0}))
+    runs = b.ice_runs(iv)
+    assert len(runs) == 1
+    r = runs[0]
+    assert r["start"] == "07/07 03:15" and r["end"] == "07/07 07:00"
+    assert r["hours"] == 3.75 and r["kwh"] == 900.0 and r["avg_kw"] == 240.0
+    m = b.mag_today([x for x in iv if x[0].date() == datetime(2026, 7, 7).date()])
+    assert m == {"kwh": 120.0, "max_kw": 120.0, "run_hours": 1.0}
+    assert b.mag_today([]) is None

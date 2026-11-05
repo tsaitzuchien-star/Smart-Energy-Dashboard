@@ -129,10 +129,49 @@ def aggregate(kw):
     return {"total": total, "floors": dict(floors), "cats": dict(cats), "plant": plant, "feeders": feeders}
 
 
+# ---------------- 儲冰與磁浮運轉（由迴路功率判斷） ----------------
+BCU_TAG = "F0_B1P2_ACMP_B_BCU1_KWH"    # 滷水主機 BCU-1：製冰約 240 kW，待機只有零點幾 kW
+MAG_TAG = "F0_B1P2_EACMP_1_CHU2_KWH"   # 磁浮冰水主機 CHU-2（240 RT）
+ICE_ON_KW = 30.0                       # BCU-1 超過這個值算「製冰中」
+MAG_ON_KW = 5.0                        # CHU-2 超過這個值算「運轉中」
+
+
+def ice_runs(iv, tag=BCU_TAG, on_kw=ICE_ON_KW):
+    """連續超過 on_kw 的 15 分鐘區間合併成一次製冰 → [{start, end, hours, kwh, avg_kw}]。
+    跨午夜的整晚製冰算同一次；中間斷超過 20 分鐘就分開。"""
+    runs, cur = [], None
+    for t, kw in iv:
+        v = kw.get(tag)
+        if v is not None and v > on_kw:
+            end = t + timedelta(minutes=15)
+            if cur and t - cur["end"] <= timedelta(minutes=20):
+                cur["end"], cur["kwh"] = end, cur["kwh"] + v / 4
+            else:
+                cur = {"start": t, "end": end, "kwh": v / 4}
+                runs.append(cur)
+    out = []
+    for r in runs:
+        h = (r["end"] - r["start"]).total_seconds() / 3600
+        out.append({"start": r["start"].strftime("%m/%d %H:%M"), "end": r["end"].strftime("%m/%d %H:%M"),
+                    "hours": round(h, 2), "kwh": round(r["kwh"], 1), "avg_kw": round(r["kwh"] / h, 1)})
+    return out
+
+
+def mag_today(iv, tag=MAG_TAG, on_kw=MAG_ON_KW):
+    """今天磁浮 {kwh, max_kw, run_hours}；沒有讀值回傳 None。"""
+    vals = [kw[tag] for _, kw in iv if tag in kw]
+    if not vals:
+        return None
+    return {"kwh": round(sum(vals) / 4, 1), "max_kw": round(max(vals), 1),
+            "run_hours": round(sum(1 for v in vals if v > on_kw) / 4, 2)}
+
+
 def build(rows, forecast=None, now=None):
     now = now or datetime.utcnow() + timedelta(hours=8)
     today = now.date()
-    iv = [(t, aggregate(kw)) for t, kw in intervals(rows) if t.date() == today]
+    raw_iv = intervals(rows)
+    today_raw = [(t, kw) for t, kw in raw_iv if t.date() == today]
+    iv = [(t, aggregate(kw)) for t, kw in today_raw]
     last_t, last_v = rows[-1] if rows else (None, {})
     hour = (last_t or now).hour
     period = tou_period(today, hour)
@@ -161,6 +200,9 @@ def build(rows, forecast=None, now=None):
         "cats": series("cats"),
         "feeders": series("feeders"),
         "plant_now": {k: round(v, 1) for k, v in sorted(latest["plant"].items(), key=lambda x: -x[1])},
+        "plant": series("plant"),
+        "ice_runs": ice_runs(raw_iv),
+        "mag_today": mag_today(today_raw),
         "forecast": forecast or {},
         "limits": {p: v for p, v in _PERIOD_LIMIT.items()},
     }
