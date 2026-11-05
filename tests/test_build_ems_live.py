@@ -117,3 +117,25 @@ def test_ice_runs_span_midnight_and_mag_today():
     m = b.mag_today([x for x in iv if x[0].date() == datetime(2026, 7, 7).date()])
     assert m == {"kwh": 120.0, "max_kw": 120.0, "run_hours": 1.0}
     assert b.mag_today([]) is None
+
+
+def test_ac_summary():
+    head = "time,viewer_ok,ice01_pct,ice02_pct,mag_c1_pct,mag_c2_pct,mag_c1_kw,mag_c2_kw,mag_limit_pct"
+    text = "\n".join([
+        head,
+        "2026-11-05 13:00:00,1,0,3.2,50,60,30,32,90",
+        "2026-11-05 13:01:00,0,,,,,,,",
+        "2026-11-05 13:14:00,1,0,3.4,70,80,40,42,90",
+        "2026-11-05 13:15:00,1,1,3,0,0,0,0,90",
+        "bad,line",
+    ])
+    rows = b.parse_ac([text])
+    assert len(rows) == 3
+    s = b.ac_summary(rows, datetime(2026, 11, 5, 13, 20))
+    assert s["age_min"] == 5
+    assert s["ice_pct"] == 2.0 and s["mag_pct"] == 0 and s["mag_kw"] == 0
+    assert s["latest"]["mag_limit_pct"] == 90
+    assert s["series"]["times"] == ["13:00", "13:15"]
+    assert s["series"]["mag_pct"] == [65.0, 0.0]
+    assert s["series"]["mag_kw"] == [72.0, 0.0]
+    assert b.ac_summary([], datetime(2026, 11, 5)) is None
