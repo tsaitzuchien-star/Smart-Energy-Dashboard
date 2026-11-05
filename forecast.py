@@ -30,6 +30,10 @@ MAG_PEAK_OFF_KW = MAG_CHILLER_RT * MAG_EFF   # 尖峰時段磁浮全關，冷房
 SOLAR_MAX_KW = 145.0
 
 # --- 即時需量控制（值班依中央監控手動調磁浮 0–100%；數值＝該時段契約上限減去以下餘裕）---
+# 預測與門檻以 BMS 讀值為準，但 BMS 比台電計費電表低約 10 kW：
+# 2026/9 帳單（8 月用電）半尖峰最高 528 kW，監控電腦總表 525 kW，BMS 只有 516 kW。
+# 所以比對契約時把預測加回 10 kW，降載／恢復門檻（BMS 畫面上的數字）也提前 10 kW。
+BMS_TO_TAIPOWER_KW = 10.0
 DL_ALERT_RATIO = 0.90      # 預警：與現場 call 報系統一致，契約 90% 時通知同仁
 DL_ACTION_MARGIN = 36.0    # 動作：磁浮降至 50%（尖峰時磁浮已關則降 AHU），融冰補足
 DL_RELEASE_MARGIN = 66.0   # 解除：連續 15 分鐘低於此值才恢復
@@ -206,7 +210,7 @@ def _hourly_loop(w, inp, *, is_tmr, day, is_holiday, event_kw, base_load, actual
 
         h_net = h_load - h_solar
         limit = _PERIOD_LIMIT[period]
-        gap = h_net - limit
+        gap = h_net + BMS_TO_TAIPOWER_KW - limit
 
         calc[h] = {"temp": h_temp, "rad": h_rad, "wx": h_data["wx"], "c_low": c_low, "c_mid": c_mid,
                    "c_high": h_data.get("c_high", 0), "cp": cp, "h_solar": h_solar, "h_load": h_load,
@@ -234,7 +238,7 @@ def _worst(calc):
     """缺口（需量 − 該時段上限）最大的時段。"""
     worst, max_gap = {"net": 0.0, "hour": "未知", "load": 0.0, "solar": 0.0}, -9999.0
     for h, c in calc.items():
-        gap = c["h_net"] - c["current_limit"]
+        gap = c["h_net"] + BMS_TO_TAIPOWER_KW - c["current_limit"]
         if gap > max_gap:
             max_gap, worst = gap, {"net": c["h_net"], "hour": h, "load": c["h_load"], "solar": c["h_solar"]}
     return worst
@@ -262,9 +266,10 @@ def _risk_blocks(model, dt, adj, day):
     for blk, (lo, hi) in demand_model.block_upper(model, dt, adj).items():
         hrs = [h for h in demand_model.BLOCKS[blk] if h in adj]
         limit = min(contract_limit_at(day, h) for h in hrs)
+        bms_limit = limit - BMS_TO_TAIPOWER_KW      # 換成 BMS 畫面上的數字
         out[blk] = {"hours": f"{hrs[0]:02d}:00–{hrs[-1] + 1:02d}:00", "pred": lo, "p95": hi, "limit": limit,
-                    "margin": limit - hi, "action": limit - DL_ACTION_MARGIN, "alert": limit * DL_ALERT_RATIO,
-                    "release": limit - DL_RELEASE_MARGIN, "period": tou_period(day, hrs[0])}
+                    "margin": bms_limit - hi, "action": bms_limit - DL_ACTION_MARGIN, "alert": limit * DL_ALERT_RATIO,
+                    "release": bms_limit - DL_RELEASE_MARGIN, "period": tou_period(day, hrs[0])}
     return out
 
 
@@ -362,7 +367,7 @@ def compute_forecast(w, inp, now_dt, today_is_holiday, tmr_is_holiday, model="au
         est_solar = h_solar_blind
         worst_limit_tmr = contract_limit
 
-    demand_gap = max_net_grid_demand - (worst_limit_tmr - 15.0)
+    demand_gap = max_net_grid_demand + BMS_TO_TAIPOWER_KW - (worst_limit_tmr - 15.0)
     needed_ice_rthr_for_grid = (demand_gap / MAG_EFF) * 6.0 if demand_gap > 0 else 0
 
     tmr_has_peak = tou_period(tmr_dt.date(), 16) == "尖峰"
