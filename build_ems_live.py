@@ -168,12 +168,21 @@ def build(rows, forecast=None, now=None):
 
 # ---------------- 各迴路（給房間卡片） ----------------
 CIRCUIT_KEY_RE = re.compile(r"^F\d_(?:G_P1|[A-Z]\dP\d)_(.+?)_B\d+_KWH_(\d+)$")
+P2_CIRCUIT_RE = re.compile(r"^F\d_[A-Z]\dP2_(.+?)_KWH_(\d+)$")       # 少數 P2 盤沒有 _B1_，例如 F0_B2P2_PB1B_KWH_1
+P2_TOTAL_RE = re.compile(r"^F\d_[A-Z]\dP2_(.+?)_KWH$")                  # P2 的盤總表／設備表，例如 F0_B2P2_ATS_1_3_KWH
 
 
 def circuit_key(tag):
-    """F1_A1P1_EL1B_B1_KWH_10 → "EL1B_10"（網站用 盤名_迴路，盤名的 - 換成 _）。"""
-    m = CIRCUIT_KEY_RE.match(tag)
-    return f"{m.group(1)}_{int(m.group(2))}" if m else None
+    """F1_A1P1_EL1B_B1_KWH_10 → "EL1B_10"（網站用 盤名_迴路，盤名的 - 換成 _）。
+
+    沒有分路電表的盤（ATS1-3、PB1A、ER2A-1、EACMP-1）只有盤總表，用 "#盤名" 給網站當共用參考：
+    F0_B2P2_ATS_1_3_KWH → "#ATS_1_3"。
+    """
+    m = CIRCUIT_KEY_RE.match(tag) or P2_CIRCUIT_RE.match(tag)
+    if m:
+        return f"{m.group(1)}_{int(m.group(2))}"
+    m = P2_TOTAL_RE.match(tag)
+    return f"#{m.group(1)}" if m else None
 
 
 def window_kw(rows, h0, h1, min_hours, weekday_only=False):
