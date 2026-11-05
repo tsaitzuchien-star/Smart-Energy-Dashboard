@@ -3,7 +3,7 @@ name: 研究資料：下載歷史氣象與行事曆（期刊用）
 on:
   push:
     branches: [claude/research]
-    paths: [.github/workflows/research-data.yml]
+    paths: [.github/workflows/research-data.yml, research/pv_monthly.py]
 
 jobs:
   fetch:
@@ -29,6 +29,15 @@ jobs:
           curl -s --retry 3 "https://historical-forecast-api.open-meteo.com/v1/forecast?latitude=$LAT&longitude=$LON&start_date=$START&end_date=$END&hourly=$V&timezone=Asia%2FTaipei&models=ecmwf_ifs" -o wx_hist_forecast_ifs.json || true
           head -c 300 wx_hist_forecast_ifs.json; echo
           ls -la
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - name: 太陽能網站每月度數
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: |
+          pip install -q gspread google-auth
+          cd out && python ../src/research/pv_monthly.py
       - name: 推到 claude/research-results（不進主程式）
         run: |
           cd out
