@@ -2,7 +2,7 @@
 ctic-ems-dashboard 網站用的公開總覽 live.json。
 
 live.json 是園區層級的彙總（總需量、各樓層、各用途、空調主機房設備）；
-rooms.json 是各分路的 [最近15分kW, 今日kWh, 本月kWh]，給網站的房間卡片用（依園區決定公開，不加密）。
+rooms.json 是各分路的 [最近15分kW, 今日kWh, 本月kWh, 夜間基載kW, 上班平均kW]，給網站的房間卡片用（依園區決定公開，不加密）。
 
 來源檔：circuit_export.py 每列一個時間點、每欄一個 InTouch 累積度數標籤（kWh）。
 兩列相減 ÷ 分鐘數 × 60 ＝ 該時段平均 kW。
@@ -176,10 +176,29 @@ def circuit_key(tag):
     return f"{m.group(1)}_{int(m.group(2))}" if m else None
 
 
+def window_kw(rows, h0, h1, min_hours, weekday_only=False):
+    """最近一天 h0–h1 時之間的平均 kW（用累積讀值頭尾相減）→ (日期, {tag: kW})；不足 min_hours 小時的日子略過。"""
+    by_day = defaultdict(list)
+    for t, v in rows:
+        if h0 <= t.hour + t.minute / 60 <= h1:
+            by_day[t.date()].append((t, v))
+    for day in sorted(by_day, reverse=True):
+        if weekday_only and day.weekday() >= 5:
+            continue
+        (t0, v0), (t1, v1) = by_day[day][0], by_day[day][-1]
+        hours = (t1 - t0).total_seconds() / 3600
+        if hours < min_hours:
+            continue
+        out = {k: kw for k in v1 if (kw := kw_between(v0.get(k), v1[k], hours * 60)) is not None}
+        return day, out
+    return None, {}
+
+
 def circuit_stats(rows, month_first=None):
-    """各迴路 {key: [最近15分kW, 今日kWh, 本月kWh]}；讀不到或倒退的給 None。
+    """各迴路 {key: [最近15分kW, 今日kWh, 本月kWh, 夜間基載kW, 上班平均kW]}；讀不到或倒退的給 None。
 
     今日＝最後讀值－今天第一筆；本月＝最後讀值－本月第一筆（month_first 是本月第一列的讀值）。
+    夜間基載＝最近一晚 00:00–06:00 平均 kW；上班平均＝最近一個平日 09:00–17:00 平均 kW。
     """
     if not rows:
         return {}
@@ -194,13 +213,19 @@ def circuit_stats(rows, month_first=None):
             return None
         return round(max(b - a, 0.0), 1)
 
+    _, night = window_kw(rows, 0, 6, 4)
+    _, work = window_kw(rows, 9, 17, 6, weekday_only=True)
+
+    def r2(x):
+        return round(x, 2) if x is not None else None
+
     out = {}
     for tag, v in last.items():
         key = circuit_key(tag)
         if not key:
             continue
-        kw = kw_last.get(tag)
-        out[key] = [round(kw, 2) if kw is not None else None, diff(day0.get(tag), v), diff(month0.get(tag), v)]
+        out[key] = [r2(kw_last.get(tag)), diff(day0.get(tag), v), diff(month0.get(tag), v),
+                    r2(night.get(tag)), r2(work.get(tag))]
     return out
 
 
