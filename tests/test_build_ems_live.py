@@ -54,6 +54,11 @@ def test_circuit_key():
     assert b.circuit_key("F1_G_P1_SP_21_3_B1_KWH_07") == "SP_21_3_7"
     assert b.circuit_key("F3_B1P1_EP3D_1_B_B1_KWH_02") == "EP3D_1_B_2"
     assert b.circuit_key("F1_A1P1_EL1B_I1_KWH") is None
+    assert b.circuit_key("F0_B2P2_PB1B_KWH_1") == "PB1B_1"
+    assert b.circuit_key("F0_B2P2_EPB1C_KWH_1") == "EPB1C_1"
+    assert b.circuit_key("F0_B2P2_ATS_1_3_KWH") == "#ATS_1_3"
+    assert b.circuit_key("F2_A2P2_ER2A_KWH") == "#ER2A"
+    assert b.circuit_key("F0_B1P2_EACMP_1_KWH") == "#EACMP_1"
 
 
 def test_circuit_stats():
