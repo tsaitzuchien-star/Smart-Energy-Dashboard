@@ -1,0 +1,40 @@
+name: 園區歷史月用電（ctic-ems-dashboard）
+
+# 每天把中創服務部「園區空間每月用電表」整理成 monthly.json，放到 ems-monthly 分支給網站讀。
+# 試算表要以「檢視者」共用給服務帳號；同仁每月更新後，隔天網站就會跟著更新。
+on:
+  schedule:
+    - cron: '30 22 * * *'   # 台北 06:30
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ems-monthly
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install requests gspread google-auth
+      - name: 整理 monthly.json
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python build_ems_monthly.py
+      - name: 發布到 ems-monthly 分支
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          cd out
+          git init -q
+          git checkout -q -b ems-monthly
+          git add monthly.json
+          git -c user.name="ems-monthly-bot" -c user.email="actions@users.noreply.github.com" commit -qm "monthly $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ems-monthly
