@@ -299,6 +299,90 @@ def diagnostics(rows):
     print("主機房上層彙總", parents)
 
 
+# ---------------- 空調監控主機（ac_logger.ps1 每分鐘一列） ----------------
+AC_KEYS = ["ice01_pct", "ice02_pct", "mag_c1_pct", "mag_c2_pct", "mag_c1_kw", "mag_c2_kw",
+           "mag_limit_pct", "mag_chws_c", "mag_chwr_c", "flow_m3h", "tank_out_c", "tank_in_c",
+           "ice_low_sp", "bcu_chws_c", "cop", "kw_per_rt"]
+
+
+def parse_ac(texts):
+    """AC_*.csv → [(datetime, {欄位: float})]，只收 viewer_ok=1 的列。"""
+    out = {}
+    for text in texts:
+        lines = [l for l in text.splitlines() if l.strip()]
+        if not lines:
+            continue
+        head = lines[0].split(",")
+        for line in lines[1:]:
+            cells = line.split(",")
+            if len(cells) != len(head):
+                continue
+            rec = dict(zip(head, cells))
+            if rec.get("viewer_ok") != "1":
+                continue
+            try:
+                t = datetime.strptime(rec["time"], "%Y-%m-%d %H:%M:%S")
+            except (KeyError, ValueError):
+                continue
+            vals = {}
+            for k in AC_KEYS:
+                try:
+                    vals[k] = float(rec[k])
+                except (KeyError, ValueError):
+                    pass
+            out[t] = vals
+    return sorted(out.items())
+
+
+def ac_summary(rows, now):
+    """最新讀值 + 今天每 15 分鐘一點的冰桶液位、磁浮負載 %、磁浮 kW；沒資料回傳 None。"""
+    if not rows:
+        return None
+    t_last, last = rows[-1]
+
+    def r1(x):
+        return None if x is None else round(x, 1)
+
+    def mag_pct(v):
+        a = [v[k] for k in ("mag_c1_pct", "mag_c2_pct") if k in v]
+        return sum(a) / len(a) if a else None
+
+    def mag_kw(v):
+        a = [v[k] for k in ("mag_c1_kw", "mag_c2_kw") if k in v]
+        return sum(a) if a else None
+
+    def ice(v):
+        a = [v[k] for k in ("ice01_pct", "ice02_pct") if k in v]
+        return sum(a) / len(a) if a else None
+
+    buckets = {}
+    for t, v in rows:
+        if t.date() != now.date():
+            continue
+        key = t.replace(minute=t.minute - t.minute % 15, second=0)
+        buckets.setdefault(key, []).append(v)
+    times, ice_s, pct_s, kw_s = [], [], [], []
+    for key in sorted(buckets):
+        vs = buckets[key]
+
+        def avg(f):
+            a = [x for x in (f(v) for v in vs) if x is not None]
+            return r1(sum(a) / len(a)) if a else None
+        times.append(key.strftime("%H:%M"))
+        ice_s.append(avg(ice))
+        pct_s.append(avg(mag_pct))
+        kw_s.append(avg(mag_kw))
+    return {
+        "time": t_last.strftime("%m/%d %H:%M"),
+        "age_min": round((now - t_last).total_seconds() / 60),
+        "latest": {k: r1(v) for k, v in last.items()},
+        "ice_pct": r1(ice(last)),
+        "mag_pct": r1(mag_pct(last)),
+        "mag_kw": r1(mag_kw(last)),
+        "series": {"times": times, "ice_pct": ice_s, "mag_pct": pct_s, "mag_kw": kw_s},
+    }
+
+
 # ---------------- Google 存取 ----------------
 def _creds():
     from google.oauth2.service_account import Credentials
@@ -308,12 +392,12 @@ def _creds():
         "https://www.googleapis.com/auth/drive.readonly"])
 
 
-def fetch_circuit_files(creds, days):
+def fetch_circuit_files(creds, days, prefix="Circuit_"):
     from google.auth.transport.requests import AuthorizedSession
     s = AuthorizedSession(creds)
     texts = []
     for d in days:
-        name = f"Circuit_{d.isoformat()}.csv"
+        name = f"{prefix}{d.isoformat()}.csv"
         r = s.get("https://www.googleapis.com/drive/v3/files",
                   params={"q": f"name = '{name}' and trashed = false",
                           "fields": "files(id,name,modifiedTime)", "orderBy": "modifiedTime desc",
@@ -438,6 +522,12 @@ def main():
     diagnostics(rows)
     data = build(rows, fetch_forecast(creds, now.date()), now)
     data["pv"] = fetch_pv(creds, now)
+    try:                                         # 空調監控只是輔助，失敗不影響總覽
+        ac_texts = fetch_circuit_files(creds, [now.date() - timedelta(days=1), now.date()], prefix="AC_")
+        data["ac"] = ac_summary(parse_ac(ac_texts), now)
+    except Exception as e:
+        print(f"讀空調監控失敗：{e}")
+        data["ac"] = None
     os.makedirs("out", exist_ok=True)
     with open("out/live.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
