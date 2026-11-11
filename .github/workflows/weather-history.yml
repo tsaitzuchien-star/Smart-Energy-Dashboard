@@ -17,18 +17,25 @@ jobs:
         with:
           python-version: '3.10'
       - run: pip install requests
-      - name: ERA5 2021-08 → now (temperature, humidity) for the AC savings baseline
+      - name: Recent weather (ERA5 archive 2025-04 → now, plus ECMWF analysis last 20 days)
         run: |
           mkdir -p /tmp/wx
           python - <<'PY'
-          import requests, json, sys
+          import requests, json, sys, datetime as dt
           sys.path.insert(0, 'tools')
           from fetch_weather_history import LAT, LON
-          u = ("https://archive-api.open-meteo.com/v1/archive?latitude=%s&longitude=%s&start_date=2021-08-01&end_date=2026-11-05"
-               "&hourly=temperature_2m,relative_humidity_2m,shortwave_radiation&timezone=Asia%%2FTaipei" % (LAT, LON))
+          end = (dt.date.today()).isoformat()
+          u = ("https://archive-api.open-meteo.com/v1/archive?latitude=%s&longitude=%s&start_date=2025-04-01&end_date=%s"
+               "&hourly=temperature_2m,relative_humidity_2m,dew_point_2m,shortwave_radiation&timezone=Asia%%2FTaipei" % (LAT, LON, end))
           r = requests.get(u, timeout=300); r.raise_for_status()
-          json.dump(r.json(), open('/tmp/wx/era5_2021_2026.json', 'w'))
-          print('ok', len(r.json()['hourly']['time']))
+          json.dump(r.json(), open('/tmp/wx/era5_2025_now.json', 'w'))
+          print('era5 ok', len(r.json()['hourly']['time']))
+          for m in ['ecmwf_ifs025', 'best_match']:
+              u = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s&past_days=20&forecast_days=1&models=%s"
+                   "&hourly=temperature_2m,relative_humidity_2m,dew_point_2m,shortwave_radiation&timezone=Asia%%2FTaipei" % (LAT, LON, m))
+              r = requests.get(u, timeout=120); r.raise_for_status()
+              json.dump(r.json(), open('/tmp/wx/recent_%s.json' % m, 'w'))
+              print(m, 'ok', len(r.json()['hourly']['time']))
           PY
       - name: 結果推到 claude/weather-history-results 分支
         if: always()
@@ -39,5 +46,5 @@ jobs:
           git rm -rfq .
           cp /tmp/wx/* .
           git add -A
-          git commit -qm "ERA5 hourly 2021-08 → 2026-11 (AC savings baseline)"
+          git commit -qm "Recent weather for weather-normalized savings"
           git push -f origin HEAD:claude/weather-history-results
