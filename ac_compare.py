@@ -145,6 +145,8 @@ def main():
         ws = book.worksheet(TAB)
     except gspread.WorksheetNotFound:
         ws = book.add_worksheet(TAB, rows=1000, cols=len(HEADER))
+    if ws.col_count < len(HEADER):
+        ws.add_cols(len(HEADER) - ws.col_count)
     if ws.row_values(1) != HEADER:
         ws.update(values=[HEADER], range_name="A1")
     col_a = ws.col_values(1)
