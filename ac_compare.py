@@ -38,6 +38,8 @@ MAX_DAY_KWH = {"mag": 4000, "bcu1": 6000, "chu1": 6000, "main": 15000}
 HEADER = ["日期", "星期", "控制方式", "季節", "外氣溫08-18(°C)", "磁浮度", "儲冰度", "500RT度",
           "空調主機合計度", "全園區度", "同溫人工日數", "同溫範圍(°C)", "同溫人工平均度", "差異(%)", "備註"]
 WK = "一二三四五六日"
+# 特殊事件日（見 節電成效/用電特殊事件紀錄.md）：照記用電，但不算差異
+SPECIAL = {"2026-11-16": "凌晨製冰測試＋早上融冰測試，不列入比較"}
 
 
 def season(d):
@@ -98,6 +100,9 @@ def build_row(d, kwh, t, auto, base):
     n, w, ref = baseline_match(base, seas, t)
     diff = round((ac - ref) / ref * 100, 1) if ac is not None and ref else None
     note = []
+    if d.isoformat() in SPECIAL:
+        diff = None
+        note.append(SPECIAL[d.isoformat()])
     if ac is None:
         note.append("主機電表資料不足")
     if ref is None:

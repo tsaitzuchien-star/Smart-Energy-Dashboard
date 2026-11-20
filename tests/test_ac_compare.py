@@ -43,3 +43,10 @@ def test_daytime_temp():
     times = [f"2026-11-10T{h:02d}:00" for h in range(24)]
     j = {"hourly": {"time": times, "temperature_2m": [20.0 if 8 <= h <= 18 else 10.0 for h in range(24)]}}
     assert m.daytime_temp(days, getter=lambda u: j) == {date(2026, 11, 10): 20.0}
+
+
+def test_special_day_has_no_diff():
+    d = date(2026, 11, 16)
+    base = [{"season": "非夏月", "T": 25.0, "ac": 500}] * 3
+    row = m.build_row(d, {"mag": 600, "bcu1": 1500, "chu1": 1, "main": 7000}, 25.0, True, base)
+    assert row[13] == "" and "製冰測試" in row[14]
