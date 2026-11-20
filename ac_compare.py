@@ -36,7 +36,8 @@ TAGS = {
 }
 MAX_DAY_KWH = {"mag": 4000, "bcu1": 6000, "chu1": 6000, "main": 15000}
 HEADER = ["日期", "星期", "控制方式", "季節", "外氣溫08-18(°C)", "磁浮度", "儲冰度", "500RT度",
-          "空調主機合計度", "全園區度", "同溫人工日數", "同溫範圍(°C)", "同溫人工平均度", "差異(%)", "備註"]
+          "空調主機合計度", "全園區度", "同溫人工日數", "同溫範圍(°C)", "同溫人工平均度", "差異(%)", "備註",
+          "熱房間平均(%)08-18", "熱房間最高(%)"]
 WK = "一二三四五六日"
 # 特殊事件日（見 節電成效/用電特殊事件紀錄.md）：照記用電，但不算差異
 SPECIAL = {"2026-11-16": "凌晨製冰測試＋早上融冰測試，不列入比較"}
@@ -92,7 +93,21 @@ def daytime_temp(days, getter=None):
     return {d: round(statistics.mean(v), 1) for d, v in acc.items() if len(v) == 11}
 
 
-def build_row(d, kwh, t, auto, base):
+def hot_rooms(text):
+    """mag_auto_YYYY-MM-DD.csv → (08–18 時 hot_share 平均 %, 最高 %)；沒資料回傳 ("", "")。"""
+    xs = []
+    for r in csv.DictReader(io.StringIO((text or "").lstrip("\ufeff"))):
+        try:
+            h = int(str(r.get("time", ""))[11:13])
+            v = float(r.get("hot_share") or "")
+        except ValueError:
+            continue
+        if 8 <= h <= 18 and 0 <= v <= 1:
+            xs.append(v * 100)
+    return (round(statistics.mean(xs), 1), round(max(xs), 1)) if xs else ("", "")
+
+
+def build_row(d, kwh, t, auto, base, hot=("", "")):
     seas = season(d)
     mode = "自動" if auto else ("人工" if d < AUTO_START else "人工／未記錄")
     parts = [kwh.get(k) for k in ("mag", "bcu1", "chu1")]
@@ -110,7 +125,7 @@ def build_row(d, kwh, t, auto, base):
     return [d.isoformat(), WK[d.weekday()], mode, seas, t,
             kwh.get("mag"), kwh.get("bcu1"), kwh.get("chu1"), ac, kwh.get("main"),
             n if ref else "", f"±{w}" if ref else "", ref if ref else "", diff if diff is not None else "",
-            "；".join(note)]
+            "；".join(note), hot[0], hot[1]]
 
 
 def _creds():
@@ -130,13 +145,27 @@ def main():
         ws = book.worksheet(TAB)
     except gspread.WorksheetNotFound:
         ws = book.add_worksheet(TAB, rows=1000, cols=len(HEADER))
+    if ws.row_values(1) != HEADER:
         ws.update(values=[HEADER], range_name="A1")
-    have = set(ws.col_values(1)[1:])
+    col_a = ws.col_values(1)
+    have = set(col_a[1:])
+    hot_col = ws.col_values(len(HEADER) - 1)
 
     cal = load_calendar({today.year - 1, today.year})
     days = [today - timedelta(days=i) for i in range(DAYS_BACK, 0, -1)]
     days = [d for d in days if d >= AUTO_START and d.isoformat() not in have
             and d.weekday() < 5 and not cal.is_holiday(d)]
+    # 已有的列若還沒有熱房間比例（例如加欄位前寫的），補上
+    fix = []
+    for i, ds in enumerate(col_a[1:], start=2):
+        if (len(hot_col) < i or not hot_col[i - 1]) and ds >= str(today - timedelta(days=DAYS_BACK)):
+            mt = fetch_circuit_files(creds, [date.fromisoformat(ds)], prefix="mag_auto_")
+            hot = hot_rooms(mt[0] if mt else "")
+            if hot[0] != "":
+                fix.append({"range": f"P{i}:Q{i}", "values": [list(hot)]})
+    if fix:
+        ws.batch_update(fix)
+        print(f"補熱房間比例 {len(fix)} 列")
     if not days:
         print("沒有要補的平日")
         return
@@ -149,8 +178,8 @@ def main():
             continue
         texts = fetch_circuit_files(creds, [d, d + timedelta(days=1)])
         rows = sorted({t: v for text in texts for t, v in parse_wide(text)}.items())
-        auto = bool(fetch_circuit_files(creds, [d], prefix="mag_auto_"))
-        new.append(build_row(d, day_kwh(rows, d), temps[d], auto, base))
+        mt = fetch_circuit_files(creds, [d], prefix="mag_auto_")
+        new.append(build_row(d, day_kwh(rows, d), temps[d], bool(mt), base, hot_rooms(mt[0] if mt else "")))
     if new:
         ws.append_rows(new, value_input_option="USER_ENTERED")
     print(f"新增 {len(new)} 列：{[r[0] for r in new]}")

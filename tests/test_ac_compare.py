@@ -50,3 +50,9 @@ def test_special_day_has_no_diff():
     base = [{"season": "非夏月", "T": 25.0, "ac": 500}] * 3
     row = m.build_row(d, {"mag": 600, "bcu1": 1500, "chu1": 1, "main": 7000}, 25.0, True, base)
     assert row[13] == "" and "製冰測試" in row[14]
+
+
+def test_hot_rooms():
+    txt = "time,mode,hot_share\n2026-11-20T07:30:00,x,0.9\n2026-11-20T09:00:00,x,0.1\n2026-11-20T15:00:00,x,0.3\n2026-11-20T17:00:00,x,\n"
+    assert m.hot_rooms(txt) == (20.0, 30.0)
+    assert m.hot_rooms("") == ("", "")
