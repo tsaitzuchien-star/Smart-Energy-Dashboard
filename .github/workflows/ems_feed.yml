@@ -1,0 +1,66 @@
+name: 指令結果與通知紀錄（監控電腦送來）
+
+# 2026-11-21 Cliff：LINE 免費方案每月 200 則不夠用。
+# 監控電腦 line_push.py 把「指令信箱／程式更新的執行結果」和各種通知，每 2 分鐘最多一次批次送到這裡，
+# 存進本 repo 的 ems-feed 分支，Claude 直接讀這個分支確認結果；LINE 只留告警與每日摘要。
+#   feed.jsonl            每行一筆（保留最近 3000 行）
+#   results/<src>.json    每個來源最新一筆執行結果（sched＝排程指令信箱、upd_bms／upd_ac＝程式更新）
+# 只用 workflow 自己的 GITHUB_TOKEN 寫入；監控電腦用的是原本只開 Actions 權限的 github_token.txt，沒有新增任何 token。
+on:
+  workflow_dispatch:
+    inputs:
+      body:
+        description: JSON 陣列，每筆 {time, kind, text, src?, result?}
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ems-feed
+  cancel-in-progress: false
+
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 寫進 ems-feed 分支
+        env:
+          BODY: ${{ inputs.body }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          url="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git init -q feed && cd feed
+          if git fetch -q --depth 1 "$url" ems-feed 2>/dev/null; then git checkout -q -b ems-feed FETCH_HEAD; else git checkout -q --orphan ems-feed; fi
+          python3 - <<'PY'
+          import json, os
+          items = json.loads(os.environ["BODY"])
+          if isinstance(items, dict):
+              items = [items]
+          keep = []
+          for it in items:
+              if not isinstance(it, dict):
+                  continue
+              e = {k: it[k] for k in ("time", "kind", "src", "text", "result") if k in it}
+              e["text"] = str(e.get("text", ""))[:5000]
+              keep.append(e)
+          old = []
+          if os.path.exists("feed.jsonl"):
+              with open("feed.jsonl", encoding="utf-8") as f:
+                  old = f.read().splitlines()
+          lines = (old + [json.dumps(e, ensure_ascii=False) for e in keep])[-3000:]
+          with open("feed.jsonl", "w", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          os.makedirs("results", exist_ok=True)
+          for e in keep:
+              src = e.get("src")
+              if e.get("kind") == "result" and src in ("sched", "upd_bms", "upd_ac") and isinstance(e.get("result"), dict):
+                  with open(f"results/{src}.json", "w", encoding="utf-8") as f:
+                      json.dump(e["result"], f, ensure_ascii=False, indent=1)
+          print(f"saved {len(keep)} item(s)")
+          PY
+          git add -A
+          git -c user.name="ems-feed-bot" -c user.email="actions@users.noreply.github.com" commit -qm "feed $(date -u +%FT%TZ)" || exit 0
+          git push -q "$url" HEAD:ems-feed
