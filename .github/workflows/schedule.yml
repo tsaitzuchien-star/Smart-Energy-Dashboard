@@ -31,6 +31,13 @@ jobs:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         run: python ingest_meter.py
 
+      # 空調「人工 vs 自動控制」同溫度比對，每個平日一列（Cliff 2026-11-21）；失敗不影響當天預測
+      - name: ❄️ 空調人工vs自動比對
+        continue-on-error: true
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        run: python ac_compare.py
+
       - name: 🚀 執行自動寫入腳本
         env:
           # 這裡會去抓我們等一下要在 GitHub 後台設定的隱藏金鑰
