@@ -1,14 +1,12 @@
 {
- "id": "2026-11-21-x1-pr79-linefeed",
+ "id": "2026-11-21-ha3-pr80-histtask",
  "kind": "update",
  "pc": "bms",
- "time": "2026-11-21 07:46:00",
+ "time": "2026-11-21 21:41:00",
  "requested_by": "Cliff Tsai",
- "note": "PR #79：LINE 額度用完，結果與例行通知改寫回 GitHub（ems-feed），LINE 只推告警、失敗與摘要（Cliff 2026-11-21 07:43 執行）",
+ "note": "PR #80：監控電腦歷史匯出改用獨立排程 CTIC_Hist_Export（第一次背景子程序被排程收掉；Cliff 2026-11-21 21:35「你可以再試一下嗎」）",
  "status": "done",
  "lines": [
-  "監控電腦：tools/line_push.py 已更新（1b42773，舊檔備份 backup\\line_push.py.20261121_074602）",
-  "已重啟排程 CTIC_Local_Live",
-  "網站 localhost:8088 有回應 ✅"
+  "監控電腦：tools/circuit_export.py 已更新（0feaf41，舊檔備份 backup\\circuit_export.py.20261121_214102）"
  ]
 }
