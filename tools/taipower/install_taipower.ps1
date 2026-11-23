@@ -10,7 +10,10 @@ Write-Host "Python: $py"
 & $py -m playwright install chromium
 
 Write-Host "`n=== 輸入台電 HVCS 帳號密碼（只存在本機 Windows 認證管理員，不寫進任何檔案）==="
-& $py taipower_common.py --set-login
+$has = & $py -c "import keyring;print(bool(keyring.get_password('CTIC_Taipower','account')))"
+if ($has -ne 'True') { & $py taipower_common.py --set-login } else { Write-Host '已有帳密，略過（要重設請執行 python taipower_common.py --set-login）' }
+& $py -c "import onnxruntime"
+if ($LASTEXITCODE -ne 0) { throw 'onnxruntime 載入失敗：請安裝 VC++ 執行階段 https://aka.ms/vs/17/release/vc_redist.x64.exe，或 pip install onnxruntime==1.16.3' }
 
 $old = Join-Path (Get-ChildItem -Path 'G:\*\BMS*' -Directory | Select-Object -First 1).FullName '台電15分鐘\taipower_data.csv'
 if (Test-Path $old) {

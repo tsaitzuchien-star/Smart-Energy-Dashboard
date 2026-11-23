@@ -196,7 +196,8 @@ def merge_save(records, path=CSV_FILE):
         return 0
     old = load_csv(path)
     new = pd.DataFrame(records, columns=COLUMNS)
-    df = pd.concat([old, new], ignore_index=True).drop_duplicates(subset=["時間"], keep="last").sort_values("時間")
+    parts = [x for x in (old, new) if not x.empty]
+    df = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["時間"], keep="last").sort_values("時間")
     tmp = path + ".tmp"
     df.to_csv(tmp, index=False, encoding="utf-8-sig")
     os.replace(tmp, path)
