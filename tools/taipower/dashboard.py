@@ -108,7 +108,7 @@ def live_section():
             (st.success if r.returncode == 0 else st.error)("完成" if r.returncode == 0 else "抓取失敗，請看 taipower.log")
             st.cache_data.clear()
             st.rerun()
-        st.caption("口徑：台電計費電表網頁 15 分鐘需量（時間＝區間結束）。BMS 總表約比台電低 3–4 kW。")
+        st.caption("口徑：台電計費電表網頁 15 分鐘需量（時間＝區間結束）。SQL 總表電表約比台電低 3–4 kW；BMS 畫面 MCB 約低 13–14 kW。")
 
     tabs = st.tabs(["📈 今日即時", "📅 歷史查詢", "🧾 每月各時段最高", "🌡️ 熱圖", "📊 年度比較", "🩺 資料品質"])
 
