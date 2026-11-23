@@ -417,7 +417,7 @@ with tab_tonight:
             v, lim = d["h_net"], d["current_limit"]
             hour = int(h[:2])
             peak = d["period"] == "尖峰"
-            billed = v + BMS_TO_TAIPOWER_KW          # 台電電表比 BMS 高約 10 kW
+            billed = v + BMS_TO_TAIPOWER_KW          # 台電電表比 BMS 高約 14 kW（forecast.BMS_TO_TAIPOWER_KW）
             if billed > lim - 15:
                 fill, txt = "#B3261E", "#FFFFFF"
             elif billed > lim - 50:
