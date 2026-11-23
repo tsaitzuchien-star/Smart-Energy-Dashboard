@@ -139,3 +139,40 @@ def test_ac_summary():
     assert s["series"]["mag_pct"] == [65.0, 0.0]
     assert s["series"]["mag_kw"] == [72.0, 0.0]
     assert b.ac_summary([], datetime(2026, 11, 5)) is None
+
+
+def test_taipower_summary():
+    from datetime import datetime
+    import build_ems_live as b
+    text = ("﻿時間,時段,需量_kW,契約容量_kW,使用率_%\n"
+            "2026-11-23 00:00,離峰,140,616,22.7\n"        # 區間 23:45–00:00 屬前一天
+            "2026-11-23 09:15,半尖峰,307,516,59.5\n"
+            "2026-11-23 13:15,離峰,285,616,46.3\n")
+    d = b.taipower_summary(text, {"ok": True, "updated": "2026-11-23 13:40:01"}, datetime(2026, 11, 23, 13, 45))
+    assert d["times"] == ["09:00", "13:00"]
+    assert d["peak_kw"] == 307 and d["peak_end"] == "09:15"
+    assert d["last_end"] == "13:15" and d["last_limit"] == 616 and d["age_min"] == 30
+    assert d["over_count"] == 0 and d["scraper_ok"] is True
+    assert b.taipower_summary("時間,時段,需量_kW,契約容量_kW,使用率_%\n", None, datetime(2026, 11, 23)) is None
+
+
+def test_build_taipower_json():
+    h = "時間,時段,需量_kW,契約容量_kW,使用率_%\n"
+    full = h + "2025-08-28 11:30,半尖峰,530,516,102.7\n2025-08-28 16:15,尖峰,400,452,88.5\n"
+    recent = h + ("2026-11-22 00:00,離峰,300,616,48.7\n2026-11-23 00:15,離峰,310,616,50.3\n"
+                  "2026-11-23 07:45,半尖峰,420,516,81.4\n2026-11-23 08:00,半尖峰,470,516,91.1\n")
+    d = b.build_taipower_json(full, recent, {"ok": True, "updated": "x"}, datetime(2026, 11, 23, 8, 10), days=3)
+    assert set(d["days"]) == {"2026-11-21", "2026-11-23"}           # 11/22 00:00 結束那筆屬於 11/21；2025 不在逐日範圍
+    assert d["days"]["2026-11-21"]["kw"][95] == 300
+    day = d["days"]["2026-11-23"]
+    assert day["kw"][0] == 310 and day["kw"][30] == 420 and day["kw"][31] == 470 and day["kw"][1] is None
+    assert day["lim"] == [[0, 616], [30, 516]]
+    aug = [m for m in d["months"] if m["month"] == "2025-08" and m["period"] == "半尖峰"][0]
+    assert aug["max"] == 530 and aug["at"] == "08-28 11:30" and aug["nover"] == 1 and aug["pct"] == 102.7
+    nov = [m for m in d["months"] if m["month"] == "2026-11" and m["period"] == "半尖峰"][0]
+    assert nov["n90"] == 1 and nov["nover"] == 0
+    assert d["over"] == [{"t": "2025-08-28 11:30", "kw": 530, "limit": 516, "period": "半尖峰"}]
+    y2025 = d["years"][0]
+    assert y2025["year"] == 2025 and y2025["max"] == 530 and y2025["kwh"] == round((530 + 400) * 0.25)
+    assert d["last_end"] == "2026-11-23 08:00" and d["age_min"] == 10 and d["scraper_ok"] is True
+    assert b.build_taipower_json(None, h, None, datetime(2026, 11, 23)) is None

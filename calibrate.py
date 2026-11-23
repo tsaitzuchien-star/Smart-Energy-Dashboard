@@ -34,6 +34,9 @@ _OM_VARS = {"T": "temperature_2m", "RH": "relative_humidity_2m", "CC": "cloud_co
 MIN_TRAIN_DAYS = 14        # 滾動驗證前至少要有的訓練天數
 EVAL_DAYS = 60             # 分位數與誤差只看最近這麼多天，跟上季節變化
 MAX_ACCEPT_MAE = 60.0      # 滾動驗證誤差超過這個值就不更新（資料異常保護）
+HALFLIFE = 10.0            # 2026-11-23 用 3 年台電資料回測：每日校正＋半衰期 10 天，上班日最高需量誤差 26.5→21.9 kW
+BIAS_DAYS = 20             # 偏差修正：近 20 個同日型的「實測最高 − 預測最高」中位數
+BIAS_MIN_DAYS = 5
 
 
 # ---------------- 資料整理 ----------------
@@ -159,6 +162,46 @@ def rolling_eval(rows, halflife=21.0, alpha=3.0):
     return out
 
 
+def _median(v):
+    s = sorted(v)
+    n = len(s)
+    return (s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2) if n else 0.0
+
+
+def _bias_block(hour):
+    """偏差修正分兩段：16–18 點（夏月尖峰、磁浮關機時段）與其他白天時段。"""
+    return "peak" if hour in dm.BLOCKS["peak"] else "semi"
+
+
+def apply_peak_bias(evals, n=BIAS_DAYS, min_days=BIAS_MIN_DAYS, daytypes=("work",), blocks=("semi",)):
+    """各小時預測取最大值會系統性低估當天最高需量（max of mean < mean of max）。
+    上班日逐日、只用當天以前 n 天的「實測最高 − 預測最高」中位數加回該時段預測（不偷看答案）；
+    只修正 16–18 點以外的白天時段：16–18 點回測本來就沒有偏差（平均 −0.4 kW），加了反而變差；
+    非上班日受活動影響大，加了也變差，所以都不修正（2025-10-16～2026-11-22 台電資料回測）。
+    回傳（修正後的 evals, 用到最新一天為止的偏差 {日型: {段: kW}}）。"""
+    out, final = [], {}
+    for dt in ("work", "off"):
+        sub = [e for e in evals if e["daytype"] == dt]
+        if dt not in daytypes:
+            out += sub
+            continue
+        corr, final[dt] = {}, {}
+        for blk in blocks:
+            by_day = {}
+            for e in sub:
+                if _bias_block(e["hour"]) == blk:
+                    a, p = by_day.get(e["date"], (-1e9, -1e9))
+                    by_day[e["date"]] = (max(a, e["y"]), max(p, e["pred"]))
+            days = sorted(by_day)
+            res = [by_day[d][0] - by_day[d][1] for d in days]
+            for i, d in enumerate(days):
+                corr[(d, blk)] = _median(res[max(0, i - n):i]) if i >= min_days else 0.0
+            if len(res) >= min_days:
+                final[dt][blk] = round(_median(res[-n:]), 1)
+        out += [{**e, "pred": e["pred"] + corr.get((e["date"], _bias_block(e["hour"])), 0.0)} for e in sub]
+    return out, final
+
+
 def _block_resid(sub, hrs):
     by_day = {}
     for e in sub:
@@ -201,13 +244,15 @@ def summarize(evals):
     return metrics, resid_q
 
 
-def calibrate(rows, halflife=21.0, alpha=3.0):
+def calibrate(rows, halflife=HALFLIFE, alpha=3.0):
     last = max(r["date"] for r in rows)
     evals = rolling_eval(rows, halflife, alpha)
+    evals, peak_bias = apply_peak_bias(evals)
     recent = [e for e in evals if e["date"] > last - timedelta(days=EVAL_DAYS)]
     metrics, resid_q = summarize(recent)
     model = dm.fit(rows, last, halflife, alpha)
     model["pv"] = dm.fit_pv(rows, last, halflife)
+    model["peak_bias"] = peak_bias
     pvm = pv_metrics(recent)
     if model["pv"] and pvm:
         metrics["pv"] = pvm

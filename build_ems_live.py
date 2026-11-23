@@ -511,6 +511,173 @@ def fetch_forecast(creds, d):
         return {}
 
 
+# ---------------- 台電計費表（監控電腦 taipower_live.py 每 15 分鐘從台電 HVCS 網頁抓） ----------------
+TAIPOWER_RECENT = "taipower_recent.csv"
+TAIPOWER_STATUS = "taipower_status.json"
+
+
+def taipower_summary(text, status, now):
+    """taipower_recent.csv（時間＝區間結束）→ 今天的台電計費表 15 分鐘需量；時間軸改成區間起點，跟網站圖一致。"""
+    today, pts = now.date(), []
+    for r in csv.DictReader(io.StringIO(text.lstrip("\ufeff"))):
+        try:
+            end = datetime.strptime(r["時間"], "%Y-%m-%d %H:%M")
+            kw, lim = float(r["需量_kW"]), float(r["契約容量_kW"])
+        except (KeyError, ValueError):
+            continue
+        start = end - timedelta(minutes=15)
+        if start.date() == today:
+            pts.append((start, kw, lim, r.get("時段", "")))
+    pts.sort()
+    if not pts:
+        return None
+    last, peak = pts[-1], max(pts, key=lambda p: p[1])
+    over = [p for p in pts if p[1] > p[2]]
+    return {
+        "times": [p[0].strftime("%H:%M") for p in pts],
+        "kw": [p[1] for p in pts],
+        "limit": [p[2] for p in pts],
+        "last_end": (last[0] + timedelta(minutes=15)).strftime("%H:%M"),
+        "last_kw": last[1], "last_limit": last[2], "last_period": last[3],
+        "peak_kw": peak[1], "peak_end": (peak[0] + timedelta(minutes=15)).strftime("%H:%M"), "peak_period": peak[3],
+        "over_count": len(over),
+        "age_min": round((now - (last[0] + timedelta(minutes=15))).total_seconds() / 60),
+        "scraper_ok": (status or {}).get("ok"),
+        "scraper_updated": (status or {}).get("updated"),
+    }
+
+
+TAIPOWER_FULL = "taipower_data.csv"
+TP_DAYS = 400            # 網站逐日曲線保留天數（涵蓋「去年同星期」d−364）
+TP_ALERT = 0.9           # 園區告警線＝契約 90%
+
+
+def _tp_rows(*texts):
+    """合併多個台電 CSV（後面的覆蓋前面的同一時間）→ [(區間起點, kW, 契約, 時段)]。"""
+    rows = {}
+    for text in texts:
+        if not text:
+            continue
+        for r in csv.DictReader(io.StringIO(text.lstrip("\ufeff"))):
+            try:
+                end = datetime.strptime(r["時間"], "%Y-%m-%d %H:%M")
+                rows[end] = (end - timedelta(minutes=15), float(r["需量_kW"]), float(r["契約容量_kW"]), r.get("時段", ""))
+            except (KeyError, ValueError):
+                continue
+    return [rows[k] for k in sorted(rows)]
+
+
+def _num(x):
+    return int(x) if float(x).is_integer() else round(x, 1)
+
+
+def build_taipower_json(full_text, recent_text, status, now, days=TP_DAYS):
+    """戰情室「台電需量」分頁用：逐日 96 點需量、契約段落、每月各時段最高、年度最高、超約清單。
+
+    逐日曲線用區間起點排 96 格（00:00 結束那筆算前一天 23:45）；表格的 at / t 用區間結束時間（同台電網站）。
+    缺資料的時段放 null，不補值。kWh＝15 分鐘需量 × 0.25 h 加總，只是估算，以帳單為準。
+    """
+    rows = _tp_rows(full_text, recent_text)
+    if not rows:
+        return None
+    first_day = now.date() - timedelta(days=days - 1)
+    day_kw, day_lim = {}, {}
+    months, years, over = {}, {}, []
+    for start, kw, lim, per in rows:
+        d, i = start.date(), (start.hour * 60 + start.minute) // 15
+        if d >= first_day:
+            day_kw.setdefault(d, [None] * 96)[i] = _num(kw)
+            day_lim.setdefault(d, [None] * 96)[i] = _num(lim)
+        end_s = (start + timedelta(minutes=15)).strftime("%m-%d %H:%M")   # 表格跟台電網站一樣用區間結束時間
+        mk = (d.strftime("%Y-%m"), per)
+        m = months.setdefault(mk, {"max": -1, "at": "", "limit": lim, "n90": 0, "nover": 0, "n": 0})
+        m["n"] += 1
+        if kw > m["max"]:
+            m.update(max=kw, at=end_s, limit=lim)
+        if kw >= lim * TP_ALERT:
+            m["n90"] += 1
+        if kw > lim:
+            m["nover"] += 1
+            over.append({"t": (start + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M"), "kw": _num(kw), "limit": _num(lim), "period": per})
+        y = years.setdefault(d.year, {"max": -1, "at": "", "period": "", "limit": lim, "kwh": 0.0, "days": set(), "nover": 0})
+        y["kwh"] += kw * 0.25
+        y["days"].add(d)
+        y["nover"] += kw > lim
+        if kw > y["max"]:
+            y.update(max=kw, at=end_s, period=per, limit=lim)
+
+    def segs(lims):
+        """契約容量依時段變化 → [[起始格, 契約], ...]（null 格沿用前一段）。"""
+        out = []
+        for i, v in enumerate(lims):
+            if v is not None and (not out or out[-1][1] != v):
+                out.append([i, v])
+        return out
+
+    out_days = {}
+    for d in sorted(day_kw):
+        out_days[d.isoformat()] = {"kw": day_kw[d], "lim": segs(day_lim[d])}
+    month_list = [{"month": k[0], "period": k[1], "max": _num(v["max"]), "at": v["at"], "limit": _num(v["limit"]),
+                   "pct": round(v["max"] / v["limit"] * 100, 1) if v["limit"] else None,
+                   "n90": v["n90"], "nover": v["nover"], "n": v["n"]}
+                  for k, v in sorted(months.items())]
+    year_list = [{"year": yr, "max": _num(v["max"]), "at": v["at"], "period": v["period"], "limit": _num(v["limit"]),
+                  "kwh": round(v["kwh"]), "days": len(v["days"]), "nover": v["nover"]}
+                 for yr, v in sorted(years.items())]
+    last = rows[-1]
+    return {
+        "updated": now.strftime("%Y-%m-%d %H:%M"),
+        "first": rows[0][0].strftime("%Y-%m-%d %H:%M"),
+        "last_start": last[0].strftime("%Y-%m-%d %H:%M"),
+        "last_end": (last[0] + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M"),
+        "last_kw": _num(last[1]), "last_limit": _num(last[2]), "last_period": last[3],
+        "age_min": round((now - last[0] - timedelta(minutes=15)).total_seconds() / 60),
+        "alert_ratio": TP_ALERT,
+        "scraper_ok": (status or {}).get("ok"),
+        "scraper_updated": (status or {}).get("updated"),
+        "days": out_days,
+        "months": month_list,
+        "years": year_list,
+        "over": over[-200:],
+        "over_total": len(over),
+    }
+
+
+def fetch_taipower(creds, now):
+    """回傳 (live.json 用的今日摘要, taipower.json)；讀不到就是 (None, None)（爬蟲還沒裝或台電網站故障），總覽照常更新。"""
+    try:
+        from google.auth.transport.requests import AuthorizedSession
+        s = AuthorizedSession(creds)
+
+        def get(name):
+            r = s.get("https://www.googleapis.com/drive/v3/files",
+                      params={"q": f"name = '{name}' and trashed = false", "fields": "files(id)",
+                              "orderBy": "modifiedTime desc", "supportsAllDrives": "true",
+                              "includeItemsFromAllDrives": "true"})
+            r.raise_for_status()
+            files = r.json().get("files", [])
+            if not files:
+                return None
+            c = s.get(f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}", params={"alt": "media"})
+            c.raise_for_status()
+            return c.content.decode("utf-8-sig", errors="replace")
+
+        text = get(TAIPOWER_RECENT)
+        if not text:
+            return None, None
+        st = get(TAIPOWER_STATUS)
+        status = json.loads(st) if st else None
+        summary = taipower_summary(text, status, now)
+        try:
+            full = get(TAIPOWER_FULL)
+        except Exception as e:                  # noqa: BLE001 — 完整檔讀不到就只用最近 35 天
+            print(f"讀台電完整歷史失敗：{e}")
+            full = None
+        return summary, build_taipower_json(full, text, status, now)
+    except Exception as e:                      # noqa: BLE001 — 台電資料是輔助，失敗不擋總覽
+        print(f"讀台電計費表資料失敗：{e}")
+        return None, None
+
 def main():
     now = datetime.utcnow() + timedelta(hours=8)
     creds = _creds()
@@ -522,6 +689,7 @@ def main():
     diagnostics(rows)
     data = build(rows, fetch_forecast(creds, now.date()), now)
     data["pv"] = fetch_pv(creds, now)
+    data["taipower"], tp_full = fetch_taipower(creds, now)
     try:                                         # 空調監控只是輔助，失敗不影響總覽
         ac_texts = fetch_circuit_files(creds, [now.date() - timedelta(days=1), now.date()], prefix="AC_")
         data["ac"] = ac_summary(parse_ac(ac_texts), now)
@@ -531,6 +699,10 @@ def main():
     os.makedirs("out", exist_ok=True)
     with open("out/live.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+    if tp_full:
+        with open("out/taipower.json", "w", encoding="utf-8") as f:
+            json.dump(tp_full, f, ensure_ascii=False, separators=(",", ":"))
+        print(f"taipower.json：{len(tp_full['days'])} 天，最新 {tp_full['last_end']} {tp_full['last_kw']} kW")
     today_rows = [(t, v) for t, v in rows if t.date() == now.date()] or rows
     stats = circuit_stats(today_rows, fetch_month_first(creds, now.date()))
     with open("out/rooms.json", "w", encoding="utf-8") as f:

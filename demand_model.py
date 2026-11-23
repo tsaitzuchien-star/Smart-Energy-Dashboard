@@ -122,6 +122,8 @@ def predict_hour(model, dt, hour, wx, mag_off=False):
     if c is None or str(hour) not in c["intercept"]:
         return None
     y = c["intercept"][str(hour)] - (model.get("mag_off_kw", MAG_OFF_KW) if mag_off else 0.0)
+    pb = model.get("peak_bias", {}).get(dt) or {}      # 近期「實測最高 − 預測最高」中位數（校正 max-of-mean 低估）
+    y += pb.get("peak" if hour in BLOCKS["peak"] else "semi", 0.0)
     for f in FEATURES:
         v = wx.get(f)
         if v is not None:
