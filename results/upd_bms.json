@@ -1,15 +1,12 @@
 {
- "id": "2026-11-23-b3d-pr83-taipower14",
+ "id": "2026-11-23-b3d-pr84-fccard",
  "kind": "update",
  "pc": "bms",
- "time": "2026-11-23 14:16:01",
+ "time": "2026-11-23 14:46:01",
  "requested_by": "Cliff Tsai",
- "note": "PR #82/#83：台電基準改 BMS＋14 kW（local_live.py）＋戰情室台電需量分頁（index.html）；Cliff 2026-11-23 14:12「執行」",
+ "note": "PR #84：台電需量分頁加「預測 vs 台電實際」對照卡（index.html）；Cliff 2026-11-23 14:42「執行」",
  "status": "done",
  "lines": [
-  "監控電腦：tools/local_live.py 已更新（62191d2，舊檔備份 backup\\local_live.py.20261123_141604）",
-  "監控電腦：index.html 已更新（62191d2，舊檔備份 backup\\index.html.20261123_141604）",
-  "已重啟排程 CTIC_Local_Live",
-  "網站 localhost:8088 有回應 ✅"
+  "監控電腦：index.html 已更新（7ee2598，舊檔備份 backup\\index.html.20261123_144604）"
  ]
 }
