@@ -1,8 +1,8 @@
-name: 每週自動校正需量模型
+name: 每日自動校正需量模型
 
 on:
   schedule:
-    - cron: '0 2 * * 1'   # 每週一 10:00（台灣時間）
+    - cron: '30 9 * * *'  # 每天 17:30（台灣時間），趕在 17:47 預測前
   workflow_dispatch:
 
 jobs:

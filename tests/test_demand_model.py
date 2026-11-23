@@ -176,3 +176,15 @@ class RewarmTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_peak_bias_applies_to_semi_hours_only():
+    import demand_model as dm
+    m = {"coef": {"work": {"intercept": {str(h): 300.0 for h in dm.HOURS},
+                           "slope": {f: 0.0 for f in dm.FEATURES}, "mu": {f: 0.0 for f in dm.FEATURES},
+                           "sd": {f: 1.0 for f in dm.FEATURES}}},
+         "peak_bias": {"work": {"semi": 8.0}}}
+    assert dm.predict_hour(m, "work", 10, {}) == 308.0
+    assert dm.predict_hour(m, "work", 16, {}) == 300.0      # 16–18 點不修正
+    m.pop("peak_bias")
+    assert dm.predict_hour(m, "work", 10, {}) == 300.0      # 舊模型檔沒有 peak_bias 照常

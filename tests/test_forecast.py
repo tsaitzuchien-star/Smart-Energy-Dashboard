@@ -69,3 +69,22 @@ class PeakMagOffTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_apply_peak_bias_uses_only_past_days():
+    from datetime import date, timedelta
+    import calibrate as c
+    ev = []
+    for i in range(30):
+        d = date(2026, 1, 1) + timedelta(days=i)
+        ev += [{"date": d, "hour": 10, "daytype": "work", "y": 310.0, "pred": 300.0},
+               {"date": d, "hour": 16, "daytype": "work", "y": 300.0, "pred": 300.0},
+               {"date": d, "hour": 10, "daytype": "off", "y": 150.0, "pred": 100.0}]
+    out, final = c.apply_peak_bias(ev)
+    first = [e for e in out if e["date"] == date(2026, 1, 1) and e["daytype"] == "work" and e["hour"] == 10][0]
+    last = [e for e in out if e["date"] == date(2026, 1, 30) and e["daytype"] == "work" and e["hour"] == 10][0]
+    assert first["pred"] == 300.0               # 前幾天資料不足不修正
+    assert last["pred"] == 310.0                # 之後加回中位數 +10
+    assert all(e["pred"] == 300.0 for e in out if e["hour"] == 16)
+    assert all(e["pred"] == 100.0 for e in out if e["daytype"] == "off")
+    assert final == {"work": {"semi": 10.0}}

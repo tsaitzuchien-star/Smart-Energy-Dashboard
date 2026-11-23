@@ -139,3 +139,18 @@ def test_ac_summary():
     assert s["series"]["mag_pct"] == [65.0, 0.0]
     assert s["series"]["mag_kw"] == [72.0, 0.0]
     assert b.ac_summary([], datetime(2026, 11, 5)) is None
+
+
+def test_taipower_summary():
+    from datetime import datetime
+    import build_ems_live as b
+    text = ("﻿時間,時段,需量_kW,契約容量_kW,使用率_%\n"
+            "2026-11-23 00:00,離峰,140,616,22.7\n"        # 區間 23:45–00:00 屬前一天
+            "2026-11-23 09:15,半尖峰,307,516,59.5\n"
+            "2026-11-23 13:15,離峰,285,616,46.3\n")
+    d = b.taipower_summary(text, {"ok": True, "updated": "2026-11-23 13:40:01"}, datetime(2026, 11, 23, 13, 45))
+    assert d["times"] == ["09:00", "13:00"]
+    assert d["peak_kw"] == 307 and d["peak_end"] == "09:15"
+    assert d["last_end"] == "13:15" and d["last_limit"] == 616 and d["age_min"] == 30
+    assert d["over_count"] == 0 and d["scraper_ok"] is True
+    assert b.taipower_summary("時間,時段,需量_kW,契約容量_kW,使用率_%\n", None, datetime(2026, 11, 23)) is None

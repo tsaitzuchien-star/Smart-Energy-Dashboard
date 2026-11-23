@@ -511,6 +511,71 @@ def fetch_forecast(creds, d):
         return {}
 
 
+# ---------------- 台電計費表（監控電腦 taipower_live.py 每 15 分鐘從台電 HVCS 網頁抓） ----------------
+TAIPOWER_RECENT = "taipower_recent.csv"
+TAIPOWER_STATUS = "taipower_status.json"
+
+
+def taipower_summary(text, status, now):
+    """taipower_recent.csv（時間＝區間結束）→ 今天的台電計費表 15 分鐘需量；時間軸改成區間起點，跟網站圖一致。"""
+    today, pts = now.date(), []
+    for r in csv.DictReader(io.StringIO(text.lstrip("\ufeff"))):
+        try:
+            end = datetime.strptime(r["時間"], "%Y-%m-%d %H:%M")
+            kw, lim = float(r["需量_kW"]), float(r["契約容量_kW"])
+        except (KeyError, ValueError):
+            continue
+        start = end - timedelta(minutes=15)
+        if start.date() == today:
+            pts.append((start, kw, lim, r.get("時段", "")))
+    pts.sort()
+    if not pts:
+        return None
+    last, peak = pts[-1], max(pts, key=lambda p: p[1])
+    over = [p for p in pts if p[1] > p[2]]
+    return {
+        "times": [p[0].strftime("%H:%M") for p in pts],
+        "kw": [p[1] for p in pts],
+        "limit": [p[2] for p in pts],
+        "last_end": (last[0] + timedelta(minutes=15)).strftime("%H:%M"),
+        "last_kw": last[1], "last_limit": last[2], "last_period": last[3],
+        "peak_kw": peak[1], "peak_end": (peak[0] + timedelta(minutes=15)).strftime("%H:%M"), "peak_period": peak[3],
+        "over_count": len(over),
+        "age_min": round((now - (last[0] + timedelta(minutes=15))).total_seconds() / 60),
+        "scraper_ok": (status or {}).get("ok"),
+        "scraper_updated": (status or {}).get("updated"),
+    }
+
+
+def fetch_taipower(creds, now):
+    """讀不到就回傳 None（爬蟲還沒裝或台電網站故障），總覽照常更新。"""
+    try:
+        from google.auth.transport.requests import AuthorizedSession
+        s = AuthorizedSession(creds)
+
+        def get(name):
+            r = s.get("https://www.googleapis.com/drive/v3/files",
+                      params={"q": f"name = '{name}' and trashed = false", "fields": "files(id)",
+                              "orderBy": "modifiedTime desc", "supportsAllDrives": "true",
+                              "includeItemsFromAllDrives": "true"})
+            r.raise_for_status()
+            files = r.json().get("files", [])
+            if not files:
+                return None
+            c = s.get(f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}", params={"alt": "media"})
+            c.raise_for_status()
+            return c.content.decode("utf-8-sig", errors="replace")
+
+        text = get(TAIPOWER_RECENT)
+        if not text:
+            return None
+        st = get(TAIPOWER_STATUS)
+        return taipower_summary(text, json.loads(st) if st else None, now)
+    except Exception as e:                      # noqa: BLE001 — 台電資料是輔助，失敗不擋總覽
+        print(f"讀台電計費表資料失敗：{e}")
+        return None
+
+
 def main():
     now = datetime.utcnow() + timedelta(hours=8)
     creds = _creds()
@@ -522,6 +587,7 @@ def main():
     diagnostics(rows)
     data = build(rows, fetch_forecast(creds, now.date()), now)
     data["pv"] = fetch_pv(creds, now)
+    data["taipower"] = fetch_taipower(creds, now)
     try:                                         # 空調監控只是輔助，失敗不影響總覽
         ac_texts = fetch_circuit_files(creds, [now.date() - timedelta(days=1), now.date()], prefix="AC_")
         data["ac"] = ac_summary(parse_ac(ac_texts), now)
