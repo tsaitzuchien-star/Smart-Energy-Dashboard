@@ -1,13 +1,15 @@
 {
- "id": "2026-11-21-ha3-pr81-histdde",
+ "id": "2026-11-23-b3d-pr83-taipower14",
  "kind": "update",
  "pc": "bms",
- "time": "2026-11-21 22:26:00",
+ "time": "2026-11-23 14:16:01",
  "requested_by": "Cliff Tsai",
- "note": "PR #81：歷史匯出等 HistData 最多 90 秒再接 DDE、不再關掉 histdata（22:01 重跑連不上 HistData；Cliff 2026-11-21 21:35「你可以再試一下嗎」）",
+ "note": "PR #82/#83：台電基準改 BMS＋14 kW（local_live.py）＋戰情室台電需量分頁（index.html）；Cliff 2026-11-23 14:12「執行」",
  "status": "done",
  "lines": [
-  "監控電腦：tools/hist_export.ps1 已更新（f93940f，舊檔備份 backup\\hist_export.ps1.20261121_222602）",
-  "監控電腦：tools/circuit_export.py 已更新（f93940f，舊檔備份 backup\\circuit_export.py.20261121_222602）"
+  "監控電腦：tools/local_live.py 已更新（62191d2，舊檔備份 backup\\local_live.py.20261123_141604）",
+  "監控電腦：index.html 已更新（62191d2，舊檔備份 backup\\index.html.20261123_141604）",
+  "已重啟排程 CTIC_Local_Live",
+  "網站 localhost:8088 有回應 ✅"
  ]
 }
