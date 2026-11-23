@@ -62,8 +62,8 @@ def main(argv=None):
     ap.add_argument("--show", action="store_true", help="顯示瀏覽器（除錯用）")
     a = ap.parse_args(argv)
 
-    # 防止前一次還沒跑完又啟動（超過 20 分鐘的鎖視為殘留）
-    if os.path.exists(LOCK) and (datetime.now().timestamp() - os.path.getmtime(LOCK)) < 1200:
+    # 防止前一次還沒跑完又啟動（超過 12 分鐘＝排程時限的鎖視為當掉殘留）
+    if os.path.exists(LOCK) and (datetime.now().timestamp() - os.path.getmtime(LOCK)) < 720:
         log.warning("上一次還在執行，略過")
         return 0
     open(LOCK, "w").close()
