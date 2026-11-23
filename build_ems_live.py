@@ -16,7 +16,7 @@ import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from forecast import tou_period, _PERIOD_LIMIT
+from forecast import tou_period, _PERIOD_LIMIT, BMS_TO_TAIPOWER_KW
 
 SHEET_ID = "1NZ0OPky-I-oWXfFTeVR8qpFT1pFBwQvRoSerJYJJMwY"
 COMPARE_TAB = "預測與實測比對"
@@ -571,7 +571,7 @@ def _num(x):
     return int(x) if float(x).is_integer() else round(x, 1)
 
 
-def build_taipower_json(full_text, recent_text, status, now, days=TP_DAYS):
+def build_taipower_json(full_text, recent_text, status, now, days=TP_DAYS, fc=None, is_holiday=None):
     """戰情室「台電需量」分頁用：逐日 96 點需量、契約段落、每月各時段最高、年度最高、超約清單。
 
     逐日曲線用區間起點排 96 格（00:00 結束那筆算前一天 23:45）；表格的 at / t 用區間結束時間（同台電網站）。
@@ -640,7 +640,98 @@ def build_taipower_json(full_text, recent_text, status, now, days=TP_DAYS):
         "years": year_list,
         "over": over[-200:],
         "over_total": len(over),
+        "forecast_check": forecast_check(fc, rows, is_holiday, today=now.date()) if fc else None,
     }
+
+
+FC_CHECK_DAYS = 30
+
+
+def forecast_check(fc, rows, is_holiday=None, days=FC_CHECK_DAYS, offset=BMS_TO_TAIPOWER_KW, today=None):
+    """每天 17:47 的隔日逐時預測（BMS 基準）＋offset 換成台電基準，對台電計費表實際。
+
+    fc: {(date, hour): 預測 kW}；rows: _tp_rows() 的 [(區間起點, kW, 契約, 時段)]。
+    只比預測有的小時，且該小時台電 4 筆都齊；當天沒有完整資料就不列（今天還沒過完不算）。
+    """
+    hourly = {}
+    for start, kw, _lim, _per in rows:
+        hourly.setdefault((start.date(), start.hour), []).append((kw, start))
+    out = []
+    for d in sorted({d for d, _ in fc}):
+        if today and d >= today:
+            continue
+        hrs = sorted(h for dd, h in fc if dd == d)
+        if not hrs or any(len(hourly.get((d, h), [])) < 4 for h in hrs):
+            continue
+        ph = max(hrs, key=lambda h: fc[(d, h)])
+        akw, astart = max((x for h in hrs for x in hourly[(d, h)]), key=lambda x: x[0])
+        pred = round(fc[(d, ph)] + offset, 1)
+        out.append({"date": d.isoformat(), "work": None if is_holiday is None else not is_holiday(d),
+                    "pred": pred, "pred_hour": f"{ph:02d}:00", "actual": _num(akw),
+                    "actual_end": (astart + timedelta(minutes=15)).strftime("%H:%M"),
+                    "err": round(akw - pred, 1), "pct": round((akw - pred) / akw * 100, 1) if akw else None,
+                    "hours": [f"{h:02d}:00" for h in hrs],
+                    "pred_h": [round(fc[(d, h)] + offset, 1) for h in hrs],
+                    "actual_h": [_num(max(k for k, _ in hourly[(d, h)])) for h in hrs]})
+    out = out[-days:]
+    keep = next((i for i in range(len(out) - 1, -1, -1) if out[i]["work"] is not False), len(out) - 1)
+    for i, o in enumerate(out):          # 逐時明細只留最近一個上班日（沒有就最近一天），檔案小一點
+        if i != keep:
+            for k in ("hours", "pred_h", "actual_h"):
+                o.pop(k)
+    work = [o for o in out if o["work"] is not False]
+    summ = None
+    if work:
+        e = [o["err"] for o in work]
+        summ = {"days": len(work), "mae": round(sum(map(abs, e)) / len(e), 1), "bias": round(sum(e) / len(e), 1),
+                "mape": round(sum(abs(o["pct"]) for o in work if o["pct"] is not None) / len(work), 1),
+                "within5": sum(abs(o["pct"]) <= 5 for o in work if o["pct"] is not None)}
+    return {"offset": offset, "days": out, "work_summary": summ}
+
+
+def parse_compare_rows(rows):
+    """「預測與實測比對」（含標題列）→ {(date, hour): 預測 kW}；同一時段後面的列覆蓋前面（重跑以最後為準）。
+    跟 trend.parse_compare 相同，但不依賴 pandas（ems_live 排程沒裝）。"""
+    if not rows:
+        return {}
+    head = rows[0]
+    try:
+        i_d, i_h, i_f = head.index("日期"), head.index("時間"), head.index("預測需量(kW)")
+    except ValueError:
+        return {}
+    out = {}
+    for r in rows[1:]:
+        try:
+            d = datetime.strptime(str(r[i_d]).strip().replace("/", "-"), "%Y-%m-%d").date()
+            out[(d, int(str(r[i_h]).split(":")[0]))] = float(str(r[i_f]).replace(",", ""))
+        except (IndexError, ValueError):
+            continue
+    return out
+
+
+def fetch_forecast_hist(creds):
+    """「預測與實測比對」全部逐時預測 {(date, hour): kW}（同一時段重跑以最後一筆為準）；讀不到回傳 {}。"""
+    try:
+        import gspread
+        return parse_compare_rows(gspread.authorize(creds).open_by_key(SHEET_ID).worksheet(COMPARE_TAB).get_all_values())
+    except Exception as e:                      # noqa: BLE001 — 對照卡是輔助
+        print(f"讀預測歷史失敗：{e}")
+        return {}
+
+
+def drive_text(session, name):
+    """雲端硬碟依檔名取最新一份的文字；找不到回傳 None。"""
+    r = session.get("https://www.googleapis.com/drive/v3/files",
+                    params={"q": f"name = '{name}' and trashed = false", "fields": "files(id)",
+                            "orderBy": "modifiedTime desc", "supportsAllDrives": "true",
+                            "includeItemsFromAllDrives": "true"})
+    r.raise_for_status()
+    files = r.json().get("files", [])
+    if not files:
+        return None
+    c = session.get(f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}", params={"alt": "media"})
+    c.raise_for_status()
+    return c.content.decode("utf-8-sig", errors="replace")
 
 
 def fetch_taipower(creds, now):
@@ -650,17 +741,7 @@ def fetch_taipower(creds, now):
         s = AuthorizedSession(creds)
 
         def get(name):
-            r = s.get("https://www.googleapis.com/drive/v3/files",
-                      params={"q": f"name = '{name}' and trashed = false", "fields": "files(id)",
-                              "orderBy": "modifiedTime desc", "supportsAllDrives": "true",
-                              "includeItemsFromAllDrives": "true"})
-            r.raise_for_status()
-            files = r.json().get("files", [])
-            if not files:
-                return None
-            c = s.get(f"https://www.googleapis.com/drive/v3/files/{files[0]['id']}", params={"alt": "media"})
-            c.raise_for_status()
-            return c.content.decode("utf-8-sig", errors="replace")
+            return drive_text(s, name)
 
         text = get(TAIPOWER_RECENT)
         if not text:
@@ -673,7 +754,13 @@ def fetch_taipower(creds, now):
         except Exception as e:                  # noqa: BLE001 — 完整檔讀不到就只用最近 35 天
             print(f"讀台電完整歷史失敗：{e}")
             full = None
-        return summary, build_taipower_json(full, text, status, now)
+        try:
+            from calendar_tw import load_calendar
+            is_hol = load_calendar({now.year - 1, now.year}).is_holiday
+        except Exception as e:                  # noqa: BLE001
+            print(f"讀行事曆失敗：{e}")
+            is_hol = None
+        return summary, build_taipower_json(full, text, status, now, fc=fetch_forecast_hist(creds), is_holiday=is_hol)
     except Exception as e:                      # noqa: BLE001 — 台電資料是輔助，失敗不擋總覽
         print(f"讀台電計費表資料失敗：{e}")
         return None, None

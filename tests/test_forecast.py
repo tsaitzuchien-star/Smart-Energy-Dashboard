@@ -88,3 +88,17 @@ def test_apply_peak_bias_uses_only_past_days():
     assert all(e["pred"] == 300.0 for e in out if e["hour"] == 16)
     assert all(e["pred"] == 100.0 for e in out if e["daytype"] == "off")
     assert final == {"work": {"semi": 10.0}}
+
+
+def test_parse_taipower_hourly_max_complete_hours_only():
+    import calibrate as c
+    from datetime import date
+    text = ("時間,時段,需量_kW,契約容量_kW,使用率_%\n"
+            "2026-11-20 09:15,半尖峰,400,516,0\n2026-11-20 09:30,半尖峰,420,516,0\n"
+            "2026-11-20 09:45,半尖峰,410,516,0\n2026-11-20 10:00,半尖峰,405,516,0\n"   # 09 時：4 筆齊
+            "2026-11-20 10:15,半尖峰,430,516,0\n")                                       # 10 時只有 1 筆 → 不用
+    tp = c.parse_taipower(text, 14.0)
+    assert tp == {(date(2026, 11, 20), 9): 406.0}
+    assert c.parse_taipower(text, 14.0, since=date(2026, 11, 21)) == {}
+    assert c.merge_actual({(date(2026, 11, 20), 9): 1.0, (date(2026, 11, 20), 8): 2.0}, tp) == \
+        {(date(2026, 11, 20), 9): 406.0, (date(2026, 11, 20), 8): 2.0}

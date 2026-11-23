@@ -176,3 +176,41 @@ def test_build_taipower_json():
     assert y2025["year"] == 2025 and y2025["max"] == 530 and y2025["kwh"] == round((530 + 400) * 0.25)
     assert d["last_end"] == "2026-11-23 08:00" and d["age_min"] == 10 and d["scraper_ok"] is True
     assert b.build_taipower_json(None, h, None, datetime(2026, 11, 23)) is None
+
+
+def test_forecast_check():
+    from datetime import date
+    rows = []
+    for h in (9, 10, 11):
+        for m in (0, 15, 30, 45):
+            rows.append((datetime(2026, 11, 20, h, m), 400 + h + m / 15, 516, "半尖峰"))
+    rows.append((datetime(2026, 11, 21, 9, 0), 300, 616, "離峰"))           # 11/21 不齊 → 不列
+    fc = {(date(2026, 11, 20), 9): 390.0, (date(2026, 11, 20), 10): 395.0, (date(2026, 11, 20), 11): 392.0,
+          (date(2026, 11, 21), 9): 300.0}
+    r = b.forecast_check(fc, rows, lambda d: False, offset=14.0, today=date(2026, 11, 23))
+    assert len(r["days"]) == 1
+    d = r["days"][0]
+    assert d["pred"] == 409.0 and d["pred_hour"] == "10:00"                 # 395 + 14
+    assert d["actual"] == 414 and d["actual_end"] == "12:00"                # 11:45 起那筆 400+11+3
+    assert d["err"] == 5.0 and d["actual_h"] == [412, 413, 414] and d["pred_h"] == [404.0, 409.0, 406.0]
+    assert r["work_summary"]["mae"] == 5.0 and r["work_summary"]["within5"] == 1
+
+
+def test_parse_compare_rows_last_wins():
+    rows = [["日期", "時間", "星期", "台電時段", "契約上限(kW)", "預測需量(kW)"],
+            ["2026-11-20", "09:00", "五", "半尖峰", "516", "390"],
+            ["2026-11-20", "09:00", "五", "半尖峰", "516", "395.5"], ["bad"]]
+    from datetime import date
+    assert b.parse_compare_rows(rows) == {(date(2026, 11, 20), 9): 395.5}
+
+
+def test_forecast_check_keeps_hourly_detail_for_last_workday():
+    from datetime import date
+    rows, fc = [], {}
+    for day in (20, 21):                                    # 11/20 五 上班、11/21 六 假日
+        for m in (0, 15, 30, 45):
+            rows.append((datetime(2026, 11, day, 9, m), 300.0, 516, "半尖峰"))
+        fc[(date(2026, 11, day), 9)] = 290.0
+    r = b.forecast_check(fc, rows, lambda d: d.weekday() >= 5, offset=14.0, today=date(2026, 11, 23))
+    assert [("hours" in o) for o in r["days"]] == [True, False]
+    assert r["work_summary"]["days"] == 1
