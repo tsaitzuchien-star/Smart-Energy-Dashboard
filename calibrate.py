@@ -1,14 +1,16 @@
 """每週自動校正：用試算表「實測需量」＋歷史氣象預報重新擬合 demand_model，寫入 model/demand_model.json。
 
 流程
-1. 讀「實測需量」工作表（每小時最大 15 分鐘需量；空白＝監控停機，跳過）。
+1. 實測值：以台電計費表官方 15 分鐘需量為準（雲端「台電15分鐘」taipower_data.csv＋taipower_recent.csv，
+   每小時取最大、扣 BMS_TO_TAIPOWER_KW 換回 BMS 基準，只用 4 筆都齊的小時）；台電沒有的小時才用
+   試算表「實測需量」（每小時最大 15 分鐘需量；空白＝監控停機，跳過）。讀不到台電資料時整份退回試算表。
 2. 讀太陽能試算表（T-REC 四組 PV 累計度數，每 15 分鐘的差×4 為功率），整理成每小時平均 PV，擬合明日 PV 預估；讀不到時略過。
 3. 向 Open-Meteo previous-runs API 取同期「前一天發布的預報」（與每天 18:00 實際拿得到的資訊一致）。
 4. 逐日滾動驗證：每一天只用它之前的資料訓練再預測，得到不偷看答案的誤差與「最壞情況」分位數。
 5. 用全部資料擬合最終係數，連同驗證結果寫入 JSON。
 
 GitHub Actions 每週執行（.github/workflows/calibrate.yml），需要 GOOGLE_CREDENTIALS。
-離線重跑：python calibrate.py --actual-csv 實測.csv --wx-json 氣象.json [--pv-csv PV.csv]
+離線重跑：python calibrate.py --actual-csv 實測.csv --wx-json 氣象.json [--pv-csv PV.csv] [--taipower-csv 台電.csv]
 """
 import argparse
 import csv
@@ -37,6 +39,7 @@ MAX_ACCEPT_MAE = 60.0      # 滾動驗證誤差超過這個值就不更新（資
 HALFLIFE = 10.0            # 2026-11-23 用 3 年台電資料回測：每日校正＋半衰期 10 天，上班日最高需量誤差 26.5→21.9 kW
 BIAS_DAYS = 20             # 偏差修正：近 20 個同日型的「實測最高 − 預測最高」中位數
 BIAS_MIN_DAYS = 5
+TP_DAYS = 400              # 台電實測只取最近這麼多天（Open-Meteo 前一天預報約 2025-10 起才有；半衰期 10 天，更早的幾乎沒權重）
 
 
 # ---------------- 資料整理 ----------------
@@ -57,6 +60,31 @@ def parse_actual(rows):
             out[(_date(r[0]), int(str(r[1]).split(":")[0]))] = float(str(r[2]).replace(",", ""))
         except ValueError:
             continue
+    return out
+
+
+def parse_taipower(text, offset, since=None):
+    """台電 taipower_*.csv（時間＝15 分鐘區間結束）→ {(date, hour): 該小時最大需量 − offset}。
+
+    小時以區間起點歸屬（與 ingest_meter 一致）；4 筆不齊的小時不用，避免缺資料把最大值算低。"""
+    import io
+    buckets = {}
+    for r in csv.DictReader(io.StringIO(text.lstrip("\ufeff"))):
+        try:
+            start = datetime.strptime(r["時間"].strip(), "%Y-%m-%d %H:%M") - timedelta(minutes=15)
+            kw = float(r["需量_kW"])
+        except (KeyError, ValueError, AttributeError):
+            continue
+        if since and start.date() < since:
+            continue
+        buckets.setdefault((start.date(), start.hour), {})[start.minute] = kw
+    return {k: round(max(v.values()) - offset, 1) for k, v in buckets.items() if len(v) == 4}
+
+
+def merge_actual(sheet, taipower):
+    """台電優先；台電沒有的小時用試算表補。"""
+    out = dict(sheet)
+    out.update(taipower)
     return out
 
 
@@ -285,6 +313,25 @@ def read_actual_sheet():
     return book.worksheet(ACTUAL_TAB).get_all_values()
 
 
+def read_taipower_drive():
+    """雲端「台電15分鐘」完整檔＋最近 35 天檔合併文字；讀不到回傳 None（退回試算表）。"""
+    try:
+        import build_ems_live as bel
+        from google.auth.transport.requests import AuthorizedSession
+        s = AuthorizedSession(bel._creds())
+        texts = [bel.drive_text(s, n) for n in (bel.TAIPOWER_FULL, bel.TAIPOWER_RECENT)]
+        texts = [t for t in texts if t]
+        if not texts:
+            return None
+        head, body = texts[0].lstrip("\ufeff").split("\n", 1)[0], []
+        for t in texts:
+            body.extend(t.lstrip("\ufeff").split("\n")[1:])
+        return "\n".join([head] + [x for x in body if x.strip()])
+    except Exception as e:   # noqa: BLE001 — 台電資料讀不到就用試算表
+        log.warning("讀不到台電計費表資料（%s），本次只用試算表", e)
+        return None
+
+
 def read_pv_sheet():
     """讀太陽能試算表；服務帳戶沒有權限或連不上時回傳空 dict（模型照常校正，只是不含 PV）。"""
     try:
@@ -305,6 +352,7 @@ def main(argv=None):
     ap.add_argument("--actual-csv", help="離線：實測需量 CSV（日期,時間,需量）")
     ap.add_argument("--wx-json", help="離線：Open-Meteo previous-runs 回應 JSON")
     ap.add_argument("--pv-csv", help="離線：PV CSV（date,time,pv_kw[,partial]；time 為 T-REC 紀錄時間）")
+    ap.add_argument("--taipower-csv", help="離線：台電 taipower_data.csv（時間,時段,需量_kW,…）")
     ap.add_argument("--out", default=dm.DEFAULT_PATH)
     a = ap.parse_args(argv)
 
@@ -313,6 +361,18 @@ def main(argv=None):
             actual = parse_actual(list(csv.reader(f)))
     else:
         actual = parse_actual(read_actual_sheet())
+    from forecast import BMS_TO_TAIPOWER_KW
+    tp_text = None
+    if a.taipower_csv:
+        with open(a.taipower_csv, encoding="utf-8-sig") as f:
+            tp_text = f.read()
+    elif not a.actual_csv:
+        tp_text = read_taipower_drive()
+    if tp_text:
+        since = (datetime.utcnow() + timedelta(hours=8)).date() - timedelta(days=TP_DAYS)
+        tp = parse_taipower(tp_text, BMS_TO_TAIPOWER_KW, since)
+        log.info("台電計費表 %d 小時（扣 %.0f kW 換回 BMS 基準），試算表 %d 小時", len(tp), BMS_TO_TAIPOWER_KW, len(actual))
+        actual = merge_actual(actual, tp)
     if not actual:
         log.error("沒有實測資料")
         return 1
