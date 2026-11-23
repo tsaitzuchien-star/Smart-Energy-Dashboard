@@ -1,0 +1,23 @@
+name: 暫用：抓 3 年歷史預報（回測用，PR 前刪除）
+on:
+  push:
+    branches: [claude/project-thread-b3dslh]
+    paths: ['.github/workflows/wx_3yr_tmp.yml']
+permissions:
+  contents: write
+jobs:
+  wx:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          mkdir out && cd out
+          V=temperature_2m,relative_humidity_2m,cloud_cover,shortwave_radiation,precipitation
+          P=$(echo $V | sed 's/,/_previous_day1,/g')_previous_day1
+          for y in 2023-11-01:2024-06-30 2024-07-01:2024-12-31 2025-01-01:2025-06-30 2025-07-01:2025-12-31 2026-01-01:2026-11-22; do
+            s=${y%%:*}; e=${y##*:}
+            curl -sf --retry 3 -m 300 "https://previous-runs-api.open-meteo.com/v1/forecast?latitude=23.936537&longitude=120.697917&start_date=$s&end_date=$e&hourly=$P&timezone=Asia%2FTaipei&models=ecmwf_ifs" -o prev_$s.json || echo "prev $s failed"
+            curl -sf --retry 3 -m 300 "https://archive-api.open-meteo.com/v1/archive?latitude=23.936537&longitude=120.697917&start_date=$s&end_date=$e&hourly=$V&timezone=Asia%2FTaipei" -o era5_$s.json || echo "era5 $s failed"
+          done
+          ls -la
+          git init -q && git checkout -q -b claude/wx-3yr && git add . && git -c user.name=bot -c user.email=a@b.c commit -qm wx
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" claude/wx-3yr
