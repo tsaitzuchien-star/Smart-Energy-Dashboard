@@ -34,9 +34,15 @@ EST_CSV = os.path.join(DATA_DIR, "water_estimates.csv")
 STATUS_FILE = os.path.join(DATA_DIR, "water_status.json")
 LOG_FILE = os.path.join(DATA_DIR, "water.log")
 RAW_DIR = os.path.join(DATA_DIR, "raw")
-RAW_KEEP = 40
+RAW_KEEP = 60
 
 log = logging.getLogger("water")
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/131.0.0.0 Safari/537.36")
+
+
+class LoginError(RuntimeError):
+    pass
 
 
 def setup_logging():
@@ -160,13 +166,39 @@ class Session:
         import ddddocr
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().start()
-        self.browser = self._pw.chromium.launch(headless=self.headless)
-        self.page = self.browser.new_context(viewport={"width": 1440, "height": 900}).new_page()
-        self.page.set_default_timeout(60000)
-        self.page.on("dialog", lambda dlg: dlg.accept())
         self._ocr = ddddocr.DdddOcr(show_ad=False)
-        self._login()
+        self.dialogs = []
+        try:
+            self._open(self.headless)
+            self._login()
+        except LoginError:
+            if not self.headless:
+                self._pw.stop()
+                raise
+            # 背景模式（headless）登入不了 → 改開視窗再試一輪（Cliff 原版程式是開視窗跑的）
+            log.warning("背景模式登入失敗，改用開視窗模式再試")
+            self.browser.close()
+            self._open(False)
+            try:
+                self._login()
+            except Exception:
+                self.browser.close()
+                self._pw.stop()
+                raise
         return self
+
+    def _open(self, headless):
+        self.browser = self._pw.chromium.launch(headless=headless)
+        # 背景模式的預設 User-Agent 含 HeadlessChrome，有些政府網站會擋，改成一般 Chrome
+        ctx = self.browser.new_context(viewport={"width": 1440, "height": 900}, locale="zh-TW", user_agent=UA)
+        self.page = ctx.new_page()
+        self.page.set_default_timeout(60000)
+
+        def on_dialog(dlg):
+            self.dialogs.append(dlg.message)
+            log.info("網頁訊息：%s", dlg.message)
+            dlg.accept()
+        self.page.on("dialog", on_dialog)
 
     def __exit__(self, *exc):
         try:
@@ -185,22 +217,36 @@ class Session:
             inputs.nth(0).fill(acc)
             inputs.nth(1).fill(pwd)
             inputs.nth(2).fill(code)
+            n_dlg = len(self.dialogs)
             page.get_by_text("送出").first.click()
             try:
                 page.wait_for_selector("text=現行指針", timeout=8000)
                 log.info("登入成功（第 %d 次）", attempt)
                 break
             except Exception:   # noqa: BLE001
-                log.info("驗證碼可能辨識錯誤，重試（第 %d 次）", attempt)
+                msg = "；".join(self.dialogs[n_dlg:]) or "（沒有跳出訊息）"
+                log.info("登入未成功（第 %d 次，驗證碼辨識為 %s）：%s", attempt, code or "空白", msg)
+                self._snap(f"login_fail_{attempt}")
+                if any(k in msg for k in ("密碼", "帳號", "鎖定", "不存在")):
+                    raise LoginError(f"台水網站回覆：{msg}（請確認帳密：python water_common.py --set-login）")
                 page.goto(LOGIN_URL, wait_until="networkidle")
                 time.sleep(1)
         else:
-            raise RuntimeError(f"登入失敗 {self.max_login_tries} 次（帳密錯誤或驗證碼一直辨識錯）")
+            raise LoginError(f"登入失敗 {self.max_login_tries} 次（最後訊息：{'；'.join(self.dialogs[-2:]) or '無'}），"
+                             f"截圖在 {RAW_DIR}")
         time.sleep(1.5)
         self.home_text = page.inner_text("body")
         if TARGET_WATER_NO not in self.home_text and TARGET_WATER_NO[1:] not in self.home_text:
             log.warning("首頁找不到水號 %s（可能只是頁面沒顯示水號），請核對 raw\\home_*.txt", TARGET_WATER_NO)
         save_raw("home", self.home_text)
+
+    def _snap(self, name):
+        try:
+            os.makedirs(RAW_DIR, exist_ok=True)
+            self.page.screenshot(path=os.path.join(RAW_DIR, f"{datetime.now():%Y%m%d_%H%M%S}_{name}.png"))
+            save_raw(name, self.page.inner_text("body"))
+        except Exception as e:   # noqa: BLE001
+            log.warning("截圖失敗：%s", e)
 
     def home(self):
         return parse_home_status(self.home_text)
