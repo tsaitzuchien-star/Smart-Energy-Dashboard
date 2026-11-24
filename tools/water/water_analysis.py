@@ -15,8 +15,8 @@ from statistics import median
 
 # ---- 告警門檻（保守：寧可晚一兩天，不要天天誤報；之後可用一整年資料再調）----
 NIGHT_FROM, NIGHT_TO = 0, 6        # 夜間時段 00–06 時
-NIGHT_MIN = 2                      # 夜間 ≥2 度
-NIGHT_STREAK = 3                   # 而且夜間每一段指針都在走、連續 3 晚 → 疑似水塔上游持續漏水
+NIGHT_MIN = 2                      # 夜間 00–06 扣掉補水後仍 ≥2 度（≈5.6 公升／分以上的持續流）
+NIGHT_STREAK = 3                   # 連續 3 晚 → 疑似水塔上游持續漏水
 WEEK_WARN, WEEK_WARN_ABS = 1.30, 30    # 近 7 天合計 > 基線 ×1.3 且多 30 度以上 → 注意
 WEEK_ALARM, WEEK_ALARM_ABS = 1.60, 60  # > 基線 ×1.6 且多 60 度以上 → 告警
 BASE_WEEKS = 8                     # 7 天基線＝前 8 個「7 天」合計的中位數
@@ -25,10 +25,10 @@ OFF_BASE_DAYS = 12
 DAY_WARN_MULT, DAY_WARN_MIN = 2.2, 70  # 單日 ≥ 上班日基線 ×2.2 且 ≥70 度 → 注意
 WORK_BASE_DAYS = 20
 STALE_DAYS = 3                     # 最新指針超過 3 天沒更新 → 資料中斷
-REFILL_STEP = 15                   # 單一時段跳 ≥15 度視為一次補水（受水池補水量約 21–22 度）
+REFILL_RATE = 5                    # 某段每小時 ≥5 度（≈83 公升／分）視為水塔補水，不算持續流（受水池一次補約 21–22 度）
 
 RESOLUTION_NOTE = [
-    "水表只給 00、03、06、15 時幾個時刻、整數度（1 度＝1 m³）：每小時 0.2 度（約 3 公升／分）以下的小漏看不出來。",
+    "台水智慧水表每小時一筆指針、整數度（1 度＝1 m³）：夜間 6 小時要累積到 2 度才判得出，約每分鐘 5.6 公升以下的小漏看不出來。",
     "園區是水塔／受水池補水（一次約 21–22 度），水表看到的是補水時間，不是用水時間；夜間有一筆大跳升多半是半夜補水，不是漏水。",
     "看得出：水塔上游埋管持續漏水（夜間指針一直走）、用量整體變多（7 天合計、假日用量高於基線）、單日暴增。",
     "看不出：漏在哪一棟、哪一層；水塔下游的小漏要累積幾天才看得出；這些要靠現場巡檢、分棟水表或水塔液位紀錄。",
@@ -55,7 +55,7 @@ def readings_map(rows):
 
 
 def daily_table(rows, estimates=None, is_holiday=None):
-    """逐日：use（日用量）、night（00–06）、night_moving（夜間每段都在走）、steps、refills、型別。"""
+    """逐日：use（日用量）、night（00–06）、night_base（夜間扣掉補水的持續流）、steps、refills、型別。"""
     rm = readings_map(rows)
     est = {}
     for e in estimates or []:
@@ -77,16 +77,24 @@ def daily_table(rows, estimates=None, is_holiday=None):
             steps.append({"from": h1, "to": h2, "use": round(v2 - v1, 3)})
         use = round(nxt[0] - hrs[0], 3) if (0 in hrs and 0 in nxt) else None
         night_steps = [s for s in steps if s["from"] >= NIGHT_FROM and s["to"] <= NIGHT_TO]
+        for st in steps:
+            st["refill"] = st["use"] / max(1, st["to"] - st["from"]) >= REFILL_RATE
+        # 夜間「持續流」＝夜間扣掉補水那幾段後的用量；連續幾晚都有才像漏水（半夜補一次水塔不算）
+        night_base = round(sum(st["use"] for st in night_steps if not st["refill"] and st["use"] > 0), 3) if night_steps else None
         night = round(hrs[NIGHT_TO] - hrs[NIGHT_FROM], 3) if (NIGHT_FROM in hrs and NIGHT_TO in hrs) else None
+        refills, prev = 0, False
+        for st in steps:                                  # 連續幾段都在補水算同一次
+            refills += st["refill"] and not prev
+            prev = st["refill"]
         out.append({
             "date": d.isoformat(),
             "off": bool(is_holiday(d)),
             "use": use,
             "est": est.get(d),
             "night": night,
-            # 夜間每一段指針都在走、而且沒有一段是整批補水（≥15 度）→ 比較像持續流，不是半夜補一次水塔
-            "night_moving": bool(night_steps) and all(1 <= s["use"] < REFILL_STEP for s in night_steps),
-            "refills": sum(1 for s in steps if s["use"] >= REFILL_STEP),
+            "night_base": night_base,
+            "night_moving": night_base is not None and night_base >= NIGHT_MIN,
+            "refills": refills,
             "neg": any(s["use"] < 0 for s in steps),
             "hours": {str(h): v for h, v in sorted(hrs.items())},
             "steps": steps,
@@ -157,14 +165,14 @@ def evaluate(days, status=None, today=None):
     # 1. 連續夜間用水（水塔上游持續漏水）
     streak = []
     for x in reversed([x for x in days if x["night"] is not None]):
-        if x["night"] >= NIGHT_MIN and x["night_moving"]:
+        if x["night_moving"]:
             streak.append(x)
         else:
             break
     if len(streak) >= NIGHT_STREAK:
-        avg = sum(x["night"] for x in streak) / len(streak)
+        avg = sum(x["night_base"] for x in streak) / len(streak)
         alerts.append({"level": "alarm", "code": "night", "title": "疑似持續漏水（夜間指針一直走）",
-                       "text": f"連續 {len(streak)} 晚 00–06 時每一段指針都在走，平均每晚 {avg:.0f} 度"
+                       "text": f"連續 {len(streak)} 晚 00–06 時扣掉水塔補水後仍有持續用水，平均每晚 {avg:.1f} 度"
                                f"（約 {avg / 6 * 1000 / 60:.1f} 公升／分）。水塔上游埋管、總表後管線優先巡檢。",
                        "date": streak[0]["date"]})
 

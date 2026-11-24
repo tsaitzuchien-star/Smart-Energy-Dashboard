@@ -127,3 +127,37 @@ def test_build_water_json():
     assert j["data_until"] == "2026-11-08" and j["hours"] == [0, 3, 6, 15]
     assert j["days"][0]["est"] == 9.0 and j["last7"] == 154
     assert j["baseline"]["week"] == 154
+
+
+def test_results_part_and_zero_cleanup():
+    text = "停水公告 2026/11/24 ...\n資料回寫\n2026/07/05\n估算量\n3585\n00時\n0\n03時\n3564\n2026/07/06\n00時\n3585\n03時\n3585\n"
+    rd, _ = wc.parse_pointer_text(wc.results_part(text))
+    rd = wc.clean_readings(rd)
+    assert ("2026-07-05", 0) not in {(r["date"], r["hour"]) for r in rd}
+    assert {r["date"] for r in rd} == {"2026-07-05", "2026-07-06"}
+
+
+def test_hourly_refill_split_is_not_leak():
+    """逐時資料：半夜補水拆成兩小時（10＋12）仍算補水，不算持續流；每小時 1 度的持續流連 3 晚要告警。"""
+    s, r = {}, 1000.0
+    for k in range(40):
+        d = date(2026, 10, 1) + timedelta(days=k)
+        hv = {h: r for h in range(24)}
+        if k == 30:
+            hv.update({h: r + (10 if h == 3 else 22) for h in range(3, 24)} | {h: r + 10 for h in (3,)})
+        hv = {h: v for h, v in hv.items()}
+        s[d] = hv
+        r += 22 if k == 30 else 0
+        for h in range(12, 24):
+            s[d][h] = s[d][h] + 22
+        r += 22
+    days = wa.daily_table(_rows(s, hours=range(24)))
+    assert not any(x["night_moving"] for x in days)
+    last = max(s)
+    for k in range(1, 5):                       # 再加 4 晚：00–06 每小時 1 度
+        d = last + timedelta(days=k)
+        s[d] = {h: r + min(h, 6) + (22 if h >= 12 else 0) for h in range(24)}
+        r += 6 + 22
+    days = wa.daily_table(_rows(s, hours=range(24)))
+    al = wa.evaluate(days, {}, today=max(s) + timedelta(days=1))
+    assert any(a["code"] == "night" for a in al)
