@@ -60,7 +60,7 @@ def build_water_json(readings_text, estimates_text, status, now, is_holiday=None
              "r7": r7.get(wa._d(x["date"]))} for x in days if x["date"] >= cut]
     hours = sorted({int(h) for x in days for h in x["hours"]})
     st = {k: status.get(k) for k in ("meter_update_time", "current_reading", "current_period_usage", "next_period_usage",
-                                     "current_fee", "last_fee", "next_fee", "outage_notice", "anomaly_status",
+                                     "current_fee", "last_fee", "next_fee", "outage_notice", "outage_list", "anomaly_status",
                                      "scraped_at", "scrape_ok", "scrape_error", "updated_at")} if status else {}
     return {
         "updated": now.strftime("%Y-%m-%d %H:%M"),

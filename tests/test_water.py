@@ -161,3 +161,21 @@ def test_hourly_refill_split_is_not_leak():
     days = wa.daily_table(_rows(s, hours=range(24)))
     al = wa.evaluate(days, {}, today=max(s) + timedelta(days=1))
     assert any(a["code"] == "night" for a in al)
+
+
+def test_anomaly_list_loading_is_not_alarm():
+    """2026-11-24 14:10 誤報：異常狀態列表還在載入（沒有表頭）不可當成異常。"""
+    loading = "停水公告:預計2026-11-24因[A路破管搶修]，請南投縣/南投市/A路。\n停水公告:預計2026-11-24因[B]，請南投縣/草屯鎮/B路。\n異常狀態列表\n«\n1\n2\n3\n»\n用水情形比較\n"
+    ok = "異常狀態列表\n時間\t內容\t詳細資料\n尚無資料\n«\n1\n»\n用水情形比較\n"
+    bad = "異常狀態列表\n時間\t內容\t詳細資料\n2026/11/24 03:00\t連續用水\t詳細\n«\n1\n»\n用水情形比較\n"
+    st = wc.parse_home_status(loading)
+    assert st["anomaly_status"].startswith("未取得")
+    assert len(st["outage_list"]) == 2 and "B路" in st["outage_notice"]
+    assert wc.parse_anomaly_list(ok) == "尚無資料"
+    assert "連續用水" in wc.parse_anomaly_list(bad)
+    s = _steady(date(2026, 10, 1), 20)
+    days = wa.daily_table(_rows(s))
+    for an, expect in ((st["anomaly_status"], False), ("偵測到異常狀態，請登入系統確認", False),
+                       (wc.parse_anomaly_list(bad), True)):
+        al = wa.evaluate(days, {"anomaly_status": an}, today=max(s))
+        assert any(a["code"] == "taiwater" for a in al) is expect
