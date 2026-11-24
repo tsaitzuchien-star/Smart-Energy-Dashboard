@@ -791,6 +791,21 @@ def main():
         with open("out/taipower.json", "w", encoding="utf-8") as f:
             json.dump(tp_full, f, ensure_ascii=False, separators=(",", ":"))
         print(f"taipower.json：{len(tp_full['days'])} 天，最新 {tp_full['last_end']} {tp_full['last_kw']} kW")
+    try:                                         # 用水戰情室（2026-11-24）：讀不到不影響其他頁面
+        from build_water import fetch_water
+        try:
+            from calendar_tw import load_calendar
+            wh = load_calendar({now.year - 1, now.year}).is_holiday
+        except Exception as e:                   # noqa: BLE001
+            print(f"用水：讀行事曆失敗，只看週末：{e}")
+            wh = None
+        water = fetch_water(creds, now, wh)
+        if water:
+            with open("out/water.json", "w", encoding="utf-8") as f:
+                json.dump(water, f, ensure_ascii=False, separators=(",", ":"))
+            print(f"water.json：{len(water['days'])} 天，資料到 {water['data_until']}，告警 {len(water['alerts'])} 則")
+    except Exception as e:                       # noqa: BLE001
+        print(f"用水戰情室失敗：{e}")
     today_rows = [(t, v) for t, v in rows if t.date() == now.date()] or rows
     stats = circuit_stats(today_rows, fetch_month_first(creds, now.date()))
     with open("out/rooms.json", "w", encoding="utf-8") as f:
