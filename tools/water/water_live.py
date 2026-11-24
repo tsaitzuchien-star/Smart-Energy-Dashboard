@@ -75,18 +75,17 @@ def notify(alerts, test=False):
     except (OSError, ValueError):
         state = {}
     rank = {"info": 0, "warn": 1, "alarm": 2}
+    # 同一種告警（code）持續期間只推一次，等級升高（注意→告警）再推一次；告警消失後才重新計算。
+    # 例如 2026-10 那次連續 7 天「近 7 天偏高」，只會推「注意」與「告警」各一則，不會天天推。
+    active = {a["code"]: a for a in alerts if a["level"] != "info" or a["code"] == "stale"}
     new = []
-    for a in alerts:
-        key = f"{a['code']}:{a['date']}"
-        if a["level"] == "info" and a["code"] != "stale":
-            continue
-        if test or rank[a["level"]] > state.get(key, -1):
+    for code, a in active.items():
+        if test or rank[a["level"]] > state.get(code, -1):
             new.append(a)
-            state[key] = rank[a["level"]]
-    # 只留 60 天
-    cut = (date.today() - timedelta(days=60)).isoformat()
-    state = {k: v for k, v in state.items() if k.split(":", 1)[1] >= cut}
+    state = {code: max(rank[a["level"]], state.get(code, -1)) for code, a in active.items()}
     if not new:
+        with open(ALERT_STATE, "w", encoding="utf-8") as f:     # 告警消失也要記下來，下次再出現才會重推
+            json.dump(state, f, ensure_ascii=False, indent=1)
         return 0
     text = "【中創用水】\n" + "\n\n".join(wa.alert_text(a) for a in new) + "\n\n戰情室：用水戰情室頁面"
     sent_line = sent_feed = False
