@@ -79,8 +79,12 @@ def daily_table(rows, estimates=None, is_holiday=None):
         night_steps = [s for s in steps if s["from"] >= NIGHT_FROM and s["to"] <= NIGHT_TO]
         for st in steps:
             st["refill"] = st["use"] / max(1, st["to"] - st["from"]) >= REFILL_RATE
+        # 補水前後那一小時常只補了一部分（例如 2、6、7、5、1 的頭尾 2 和 1），也算補水的一部分，不算持續流
+        flags = [st["refill"] for st in steps]
+        for i, st in enumerate(steps):
+            st["edge"] = not st["refill"] and ((i > 0 and flags[i - 1]) or (i + 1 < len(flags) and flags[i + 1]))
         # 夜間「持續流」＝夜間扣掉補水那幾段後的用量；連續幾晚都有才像漏水（半夜補一次水塔不算）
-        night_base = round(sum(st["use"] for st in night_steps if not st["refill"] and st["use"] > 0), 3) if night_steps else None
+        night_base = round(sum(st["use"] for st in night_steps if not st["refill"] and not st["edge"] and st["use"] > 0), 3) if night_steps else None
         night = round(hrs[NIGHT_TO] - hrs[NIGHT_FROM], 3) if (NIGHT_FROM in hrs and NIGHT_TO in hrs) else None
         refills, prev = 0, False
         for st in steps:                                  # 連續幾段都在補水算同一次
