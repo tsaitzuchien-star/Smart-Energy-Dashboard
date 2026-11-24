@@ -1,13 +1,12 @@
 {
- "id": "2026-11-24-xiemqd-pr87-step2",
+ "id": "2026-11-24-xiemqd-pr92-hub",
  "kind": "update",
  "pc": "bms",
- "time": "2026-11-24 16:36:01",
+ "time": "2026-11-24 16:46:01",
  "requested_by": "Cliff Tsai",
- "note": "PR #87/#89/#91 第 2 步：監控電腦加 hub.html（儀表板總覽）、water.html（用水戰情室）；Cliff 2026-11-24 16:23「好」",
+ "note": "PR #92：總覽頁成果卡改連依 02 總表更新的新版、拿掉警示（hub.html）；Cliff 2026-11-24 16:44「好」",
  "status": "done",
  "lines": [
-  "監控電腦：hub.html 已更新（d227d4d，舊檔備份 backup\\hub.html.20261124_163603）",
-  "監控電腦：water.html 已更新（d227d4d，舊檔備份 backup\\water.html.20261124_163603）"
+  "監控電腦：hub.html 已更新（cb102e4，舊檔備份 backup\\hub.html.20261124_164602）"
  ]
 }
