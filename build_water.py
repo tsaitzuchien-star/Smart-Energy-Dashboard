@@ -78,7 +78,7 @@ def build_water_json(readings_text, estimates_text, status, now, is_holiday=None
         "bills": bills or {},
         "bills_src": bills_src,
         "rules": {
-            "night": f"連續 {wa.NIGHT_STREAK} 晚 00–06 時每段指針都在走（≥1 度、不是整批補水），且每晚 ≥{wa.NIGHT_MIN} 度 → 疑似持續漏水",
+            "night": f"連續 {wa.NIGHT_STREAK} 晚 00–06 時扣掉水塔補水（每小時 ≥{wa.REFILL_RATE} 度的時段）後仍 ≥{wa.NIGHT_MIN} 度 → 疑似持續漏水",
             "week": f"近 7 天合計 > 基線 ×{wa.WEEK_WARN}（且多 {wa.WEEK_WARN_ABS} 度）注意；×{wa.WEEK_ALARM}（且多 {wa.WEEK_ALARM_ABS} 度）告警。基線＝最近 7 天之前 {wa.BASE_WEEKS} 個 7 天合計的中位數",
             "offday": f"假日單日 > 假日基線 + {wa.OFF_WARN_ABS} 度 → 注意",
             "day": f"單日 ≥ 上班日基線 ×{wa.DAY_WARN_MULT} 且 ≥{wa.DAY_WARN_MIN} 度 → 注意",

@@ -34,9 +34,20 @@ EST_CSV = os.path.join(DATA_DIR, "water_estimates.csv")
 STATUS_FILE = os.path.join(DATA_DIR, "water_status.json")
 LOG_FILE = os.path.join(DATA_DIR, "water.log")
 RAW_DIR = os.path.join(DATA_DIR, "raw")
-RAW_KEEP = 40
+RAW_KEEP = 60
 
 log = logging.getLogger("water")
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/131.0.0.0 Safari/537.36")
+
+
+# 台水「顯示時段」一次最多勾 6 個 → 分 4 次查完 24 小時；第一組是台水預設（估算量＝15 時 − 00 時）
+DEFAULT_HOURS = (0, 3, 6, 9, 12, 15)
+HOUR_GROUPS = (DEFAULT_HOURS, (1, 2, 4, 5, 7, 8), (10, 11, 13, 14, 16, 17), (18, 19, 20, 21, 22, 23))
+
+
+class LoginError(RuntimeError):
+    pass
 
 
 def setup_logging():
@@ -160,13 +171,39 @@ class Session:
         import ddddocr
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().start()
-        self.browser = self._pw.chromium.launch(headless=self.headless)
-        self.page = self.browser.new_context(viewport={"width": 1440, "height": 900}).new_page()
-        self.page.set_default_timeout(60000)
-        self.page.on("dialog", lambda dlg: dlg.accept())
         self._ocr = ddddocr.DdddOcr(show_ad=False)
-        self._login()
+        self.dialogs = []
+        try:
+            self._open(self.headless)
+            self._login()
+        except LoginError:
+            if not self.headless:
+                self._pw.stop()
+                raise
+            # 背景模式（headless）登入不了 → 改開視窗再試一輪（Cliff 原版程式是開視窗跑的）
+            log.warning("背景模式登入失敗，改用開視窗模式再試")
+            self.browser.close()
+            self._open(False)
+            try:
+                self._login()
+            except Exception:
+                self.browser.close()
+                self._pw.stop()
+                raise
         return self
+
+    def _open(self, headless):
+        self.browser = self._pw.chromium.launch(headless=headless)
+        # 背景模式的預設 User-Agent 含 HeadlessChrome，有些政府網站會擋，改成一般 Chrome
+        ctx = self.browser.new_context(viewport={"width": 1440, "height": 900}, locale="zh-TW", user_agent=UA)
+        self.page = ctx.new_page()
+        self.page.set_default_timeout(60000)
+
+        def on_dialog(dlg):
+            self.dialogs.append(dlg.message)
+            log.info("網頁訊息：%s", dlg.message)
+            dlg.accept()
+        self.page.on("dialog", on_dialog)
 
     def __exit__(self, *exc):
         try:
@@ -185,22 +222,42 @@ class Session:
             inputs.nth(0).fill(acc)
             inputs.nth(1).fill(pwd)
             inputs.nth(2).fill(code)
+            n_dlg = len(self.dialogs)
             page.get_by_text("送出").first.click()
             try:
                 page.wait_for_selector("text=現行指針", timeout=8000)
                 log.info("登入成功（第 %d 次）", attempt)
                 break
             except Exception:   # noqa: BLE001
-                log.info("驗證碼可能辨識錯誤，重試（第 %d 次）", attempt)
+                # 台水錯誤訊息有時是跳出視窗、有時是登入框上方的紅字（例如「登入失敗，請確定您的帳號密碼」）
+                try:
+                    body = page.inner_text("body")
+                except Exception:   # noqa: BLE001
+                    body = ""
+                red = re.search(r"(登入失敗[^\n]*|驗證碼[^\n]*錯誤[^\n]*|[^\n]*鎖定[^\n]*)", body)
+                msg = "；".join(self.dialogs[n_dlg:] + ([red.group(1).strip()] if red else [])) or "（沒有跳出訊息）"
+                log.info("登入未成功（第 %d 次，驗證碼辨識為 %s）：%s", attempt, code or "空白", msg)
+                self._snap(f"login_fail_{attempt}")
+                if any(k in msg for k in ("密碼", "帳號", "鎖定", "不存在")):   # 帳密錯就立刻停，避免連錯被鎖
+                    raise LoginError(f"台水網站回覆：{msg}（請確認帳密：python water_common.py --set-login）")
                 page.goto(LOGIN_URL, wait_until="networkidle")
                 time.sleep(1)
         else:
-            raise RuntimeError(f"登入失敗 {self.max_login_tries} 次（帳密錯誤或驗證碼一直辨識錯）")
+            raise LoginError(f"登入失敗 {self.max_login_tries} 次（最後訊息：{'；'.join(self.dialogs[-2:]) or '無'}），"
+                             f"截圖在 {RAW_DIR}")
         time.sleep(1.5)
         self.home_text = page.inner_text("body")
         if TARGET_WATER_NO not in self.home_text and TARGET_WATER_NO[1:] not in self.home_text:
             log.warning("首頁找不到水號 %s（可能只是頁面沒顯示水號），請核對 raw\\home_*.txt", TARGET_WATER_NO)
         save_raw("home", self.home_text)
+
+    def _snap(self, name):
+        try:
+            os.makedirs(RAW_DIR, exist_ok=True)
+            self.page.screenshot(path=os.path.join(RAW_DIR, f"{datetime.now():%Y%m%d_%H%M%S}_{name}.png"))
+            save_raw(name, self.page.inner_text("body"))
+        except Exception as e:   # noqa: BLE001
+            log.warning("截圖失敗：%s", e)
 
     def home(self):
         return parse_home_status(self.home_text)
@@ -229,10 +286,25 @@ class Session:
         except Exception as e:   # noqa: BLE001
             return f"(讀不到表單選項：{e})"
 
-    def pointer(self, start, end):
-        """查詢 start~end（YYYY/MM/DD），回傳頁面文字。"""
+    def _set_hours(self, hours):
+        """勾選「顯示時段」（台水限最多 6 個）。checkbox id 為 checkbox-00 … checkbox-24。"""
+        want = {f"{h:02d}" for h in hours}
+        self.page.evaluate("""(want) => {
+            document.querySelectorAll('input[type=checkbox][id^="checkbox-"]').forEach(cb => {
+                const on = want.includes(cb.value);
+                if (cb.checked !== on) cb.click();
+            });
+        }""", sorted(want))
+
+    def pointer(self, start, end, hours=DEFAULT_HOURS, timeout=45):
+        """查詢 start~end（YYYY/MM/DD），回傳頁面文字。
+
+        台水頁面按「查詢」後是非同步更新，舊結果會留在畫面上好幾秒（2026-11-24 實測：馬上讀會讀到前一兩次查詢的結果），
+        所以要等到結果第一張卡片的日期落在查詢區間、時段也和勾選的一樣才算數。
+        """
         self._open_pointer_page()
         page = self.page
+        self._set_hours(hours)
         page.evaluate(
             """([s, e]) => {
                 const inputs = Array.from(document.querySelectorAll('input[type="text"]')).filter(el => el.offsetParent !== null);
@@ -243,15 +315,66 @@ class Session:
             }""",
             [start, end],
         )
+        before = page.inner_text("body")
         page.get_by_text("查詢", exact=True).first.click()
-        time.sleep(3.5)
-        try:
-            page.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:   # noqa: BLE001
-            pass
-        text = page.inner_text("body")
-        save_raw(f"pointer_{start.replace('/', '')}_{end.replace('/', '')}", text)
+        s0, e0 = start.replace("/", "-"), end.replace("/", "-")
+        want = sorted(hours)
+        t_end = time.time() + timeout
+        text = before
+        while time.time() < t_end:
+            time.sleep(1)
+            text = page.inner_text("body")
+            if text == before:
+                continue
+            rd, _ = parse_pointer_text(results_part(text))
+            if not rd:
+                if re.search(r"查無|無資料|沒有資料", results_part(text)):
+                    break
+                continue
+            first = rd[0]["date"]
+            hrs = {r["hour"] for r in rd}
+            if s0 <= first <= e0 and hrs <= set(want):     # 個別時段可能沒回傳，所以用「包含於」
+                time.sleep(1)
+                text = page.inner_text("body")
+                break
+        else:
+            log.warning("%s~%s（%s 時）等 %d 秒結果還沒更新", start, end, ",".join(f"{h:02d}" for h in hours), timeout)
+            text = ""
+        save_raw(f"pointer_{start.replace('/', '')}_{end.replace('/', '')}_h{hours[0]:02d}", text)
         return text
+
+    def pointer_all(self, start, end, groups=HOUR_GROUPS):
+        """分 4 次（每次 6 個時段）查完 00–23 時，回傳 (readings, estimates)，只留查詢區間內的日子。
+        估算量只取預設時段那一次（台水定義：第六個時段減第一個時段，也就是 00→15 時）。"""
+        s0, e0 = start.replace("/", "-"), end.replace("/", "-")
+        readings, estimates = [], []
+        for k, g in enumerate(groups):
+            text = self.pointer(start, end, g)
+            if not text and k == 0:
+                break                       # 第一組就等不到結果（多半是這段期間沒資料）→ 其他時段不用再等
+            rd, es = parse_pointer_text(results_part(text))
+            readings += [r for r in rd if s0 <= r["date"] <= e0 and r["hour"] in g]
+            if list(g) == list(DEFAULT_HOURS):
+                estimates += [x for x in es if s0 <= x["date"] <= e0]
+        return clean_readings(readings), estimates
+
+
+def results_part(text):
+    """頁面文字只取查詢結果那段（「資料回寫」之後），避免把查詢條件或公告的日期當成資料。"""
+    i = text.find("資料回寫")
+    return text[i:] if i >= 0 else text
+
+
+def clean_readings(readings):
+    """去掉明顯是缺值的 0（例如 2026-07-05 00 時 0，其他時刻 3564）。"""
+    by = {}
+    for r in readings:
+        by.setdefault(r["date"], []).append(r)
+    out = []
+    for d, rs in by.items():
+        big = max(r["reading"] for r in rs)
+        out += [r for r in rs if not (r["reading"] == 0 and big > 100)]
+    return out
 
 
 # ---------------- 存檔 ----------------

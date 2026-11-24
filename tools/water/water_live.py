@@ -1,4 +1,4 @@
-"""每天執行（工作排程 CTIC_Water_Live，08:10 與 14:10）：登入台水水表e管家，抓首頁狀態與最近 14 天用水指針，
+"""每天執行（工作排程 CTIC_Water_Live，08:10 與 14:10）：登入台水水表e管家，抓首頁狀態與最近 14 天逐時用水指針（分 4 次查完 00–23 時），
 存到 C:\\BMS_Export\\water，判讀漏水告警（有新告警就推 LINE＋GitHub ems-feed），
 再把資料複製到 Google 雲端「BMS自動匯出\\自來水」給戰情室網頁用。
 
@@ -141,8 +141,7 @@ def run(a):
         try:
             with wc.Session(headless=not a.show) as s:
                 status = s.home()
-                text = s.pointer(start.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d"))
-            rd, es = wc.parse_pointer_text(text)
+                rd, es = s.pointer_all(start.strftime("%Y/%m/%d"), end.strftime("%Y/%m/%d"))
             if not rd:
                 raise RuntimeError("查詢頁解析不到任何指針（台水頁面可能改版），請看 raw 資料夾")
             n_r, n_e = wc.merge_save(rd, es)

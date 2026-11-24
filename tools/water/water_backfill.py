@@ -1,4 +1,4 @@
-"""補抓智慧水表歷史指針（預設 2026-01-01 到昨天），每次查 1 個月，登入一次查完。
+"""補抓智慧水表歷史指針（預設 2026-01-01 到昨天），每次查 1 個月（分 4 次查完 00–23 時逐時指針），登入一次查完。
 
     python water_backfill.py                          # 2026-01-01 起
     python water_backfill.py --start 2026-03-01
@@ -49,11 +49,7 @@ def main(argv=None):
             got = None
             for k in range(3):
                 try:
-                    text = s.pointer(c0.strftime("%Y/%m/%d"), c1.strftime("%Y/%m/%d"))
-                    rd, es = wc.parse_pointer_text(text)
-                    rd = [r for r in rd if c0.isoformat() <= r["date"] <= c1.isoformat()]
-                    es = [e for e in es if c0.isoformat() <= e["date"] <= c1.isoformat()]
-                    got = (rd, es)
+                    got = s.pointer_all(c0.strftime("%Y/%m/%d"), c1.strftime("%Y/%m/%d"))
                     break
                 except Exception as e:   # noqa: BLE001
                     log.warning("%s~%s 第 %d 次失敗：%s", c0, c1, k + 1, e)
