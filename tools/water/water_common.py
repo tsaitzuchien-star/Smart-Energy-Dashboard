@@ -224,10 +224,16 @@ class Session:
                 log.info("登入成功（第 %d 次）", attempt)
                 break
             except Exception:   # noqa: BLE001
-                msg = "；".join(self.dialogs[n_dlg:]) or "（沒有跳出訊息）"
+                # 台水錯誤訊息有時是跳出視窗、有時是登入框上方的紅字（例如「登入失敗，請確定您的帳號密碼」）
+                try:
+                    body = page.inner_text("body")
+                except Exception:   # noqa: BLE001
+                    body = ""
+                red = re.search(r"(登入失敗[^\n]*|驗證碼[^\n]*錯誤[^\n]*|[^\n]*鎖定[^\n]*)", body)
+                msg = "；".join(self.dialogs[n_dlg:] + ([red.group(1).strip()] if red else [])) or "（沒有跳出訊息）"
                 log.info("登入未成功（第 %d 次，驗證碼辨識為 %s）：%s", attempt, code or "空白", msg)
                 self._snap(f"login_fail_{attempt}")
-                if any(k in msg for k in ("密碼", "帳號", "鎖定", "不存在")):
+                if any(k in msg for k in ("密碼", "帳號", "鎖定", "不存在")):   # 帳密錯就立刻停，避免連錯被鎖
                     raise LoginError(f"台水網站回覆：{msg}（請確認帳密：python water_common.py --set-login）")
                 page.goto(LOGIN_URL, wait_until="networkidle")
                 time.sleep(1)
