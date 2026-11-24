@@ -1,12 +1,13 @@
 {
- "id": "2026-11-23-b3d-pr84-fccard",
+ "id": "2026-11-24-xiemqd-pr87-step1",
  "kind": "update",
  "pc": "bms",
- "time": "2026-11-23 14:46:01",
+ "time": "2026-11-24 16:26:01",
  "requested_by": "Cliff Tsai",
- "note": "PR #84：台電需量分頁加「預測 vs 台電實際」對照卡（index.html）；Cliff 2026-11-23 14:42「執行」",
+ "note": "PR #87 第 1 步：update_cmd.ps1（可更新清單加 hub.html、water.html）+ index.html（導覽列「儀表板總覽」、#分頁直達）；Cliff 2026-11-24 16:23「好」",
  "status": "done",
  "lines": [
-  "監控電腦：index.html 已更新（7ee2598，舊檔備份 backup\\index.html.20261123_144604）"
+  "監控電腦：tools/update_cmd.ps1 已更新（3fd1b18，舊檔備份 backup\\update_cmd.ps1.20261124_162603）",
+  "監控電腦：index.html 已更新（3fd1b18，舊檔備份 backup\\index.html.20261124_162603）"
  ]
 }
