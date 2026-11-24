@@ -97,6 +97,35 @@ def _num(s):
         return None
 
 
+ANOMALY_NONE = "尚無資料"
+ANOMALY_UNKNOWN = "未取得（首頁異常狀態列表尚未載入）"
+
+
+def parse_anomaly_list(body_text):
+    """首頁「異常狀態列表」：載入完成會有表頭「時間 內容 詳細資料」，沒有異常時下一行是「尚無資料」。
+    表頭還沒出現＝還在載入 → 未取得（不可當成異常，2026-11-24 14:10 曾因此誤報）。"""
+    i = body_text.find("異常狀態列表")
+    if i < 0:
+        return ANOMALY_UNKNOWN
+    sec = body_text[i + len("異常狀態列表"):]
+    j = sec.find("用水情形比較")
+    sec = sec[:j] if j >= 0 else sec[:1500]
+    m = re.search(r"時間\s+內容[^\n]*\n", sec)
+    if not m:
+        return ANOMALY_UNKNOWN
+    rows = []
+    for ln in sec[m.end():].splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        if ln in ("«", "»") or ln.isdigit():
+            break
+        rows.append(re.sub(r"\s+", " ", ln))
+    if not rows or rows[0] == ANOMALY_NONE:
+        return ANOMALY_NONE
+    return "；".join(rows[:5])
+
+
 def parse_home_status(body_text):
     """首頁純文字 → 核心 KPI、停水公告、異常通報（沿用 Cliff 原版 scraper.py 的規則）。"""
     def extract(pattern, default=""):
@@ -106,7 +135,8 @@ def parse_home_status(body_text):
     def num(pattern):
         return _num(extract(pattern))
 
-    anomaly = "尚無資料" if "尚無資料" in body_text else extract(r"異常[^\n]*?[:：]\s*([^\n]+)", "偵測到異常狀態，請登入系統確認")
+    anomaly = parse_anomaly_list(body_text)
+    outages = [x.strip() for x in re.findall(r"停水公告[:：]\s*([^\n]+)", body_text)]
     return {
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "water_no": TARGET_WATER_NO,
@@ -117,7 +147,8 @@ def parse_home_status(body_text):
         "current_fee": num(r"本期試算水費.*?([\d,]+)\s*元"),
         "last_fee": num(r"上期水費.*?([\d,]+)\s*元"),
         "next_fee": num(r"下期試算水費.*?([\d,]+)\s*元"),
-        "outage_notice": extract(r"停水公告[:：]\s*([^\n]+)", "目前無停水公告"),
+        "outage_notice": "；".join(outages) if outages else "目前無停水公告",   # 台水轄區（南投縣）公告，不一定是園區
+        "outage_list": outages,
         "anomaly_status": anomaly,
     }
 
@@ -247,6 +278,11 @@ class Session:
                              f"截圖在 {RAW_DIR}")
         time.sleep(1.5)
         self.home_text = page.inner_text("body")
+        for _ in range(20):                      # 異常狀態列表是非同步載入，等它出現表頭（最多約 20 秒）
+            if parse_anomaly_list(self.home_text) != ANOMALY_UNKNOWN:
+                break
+            time.sleep(1)
+            self.home_text = page.inner_text("body")
         if TARGET_WATER_NO not in self.home_text and TARGET_WATER_NO[1:] not in self.home_text:
             log.warning("首頁找不到水號 %s（可能只是頁面沒顯示水號），請核對 raw\\home_*.txt", TARGET_WATER_NO)
         save_raw("home", self.home_text)

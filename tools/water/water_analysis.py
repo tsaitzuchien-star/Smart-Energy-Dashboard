@@ -212,7 +212,7 @@ def evaluate(days, status=None, today=None):
                            "text": "近 7 天有指針變小的時段（換表或台水資料修正），該段用量不可信。", "date": last["date"]})
 
     an = status.get("anomaly_status")
-    if an and an != "尚無資料":
+    if an and an != "尚無資料" and not str(an).startswith("未取得") and an != "偵測到異常狀態，請登入系統確認":
         alerts.append({"level": "warn", "code": "taiwater", "title": "台水異常通報", "text": str(an),
                        "date": today.isoformat()})
     return alerts
