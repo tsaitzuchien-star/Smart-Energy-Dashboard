@@ -76,6 +76,9 @@ def daily_table(rows, estimates=None, is_holiday=None):
         for (h1, v1), (h2, v2) in zip(pts, pts[1:]):
             steps.append({"from": h1, "to": h2, "use": round(v2 - v1, 3)})
         use = round(nxt[0] - hrs[0], 3) if (0 in hrs and 0 in nxt) else None
+        # 最新一天還沒有隔天 00 時：先用當天最後一個時刻（通常 23 時）算「00→最後時刻」的部分用量給網站顯示，不進基線與告警
+        last_h = max(hrs) if hrs else None
+        use_partial = round(hrs[last_h] - hrs[0], 3) if (use is None and 0 in hrs and last_h and last_h > 0) else None
         night_steps = [s for s in steps if s["from"] >= NIGHT_FROM and s["to"] <= NIGHT_TO]
         for st in steps:
             st["refill"] = st["use"] / max(1, st["to"] - st["from"]) >= REFILL_RATE
@@ -94,6 +97,8 @@ def daily_table(rows, estimates=None, is_holiday=None):
             "date": d.isoformat(),
             "off": bool(is_holiday(d)),
             "use": use,
+            "use_partial": use_partial,
+            "partial_to": last_h if use_partial is not None else None,
             "est": est.get(d),
             "night": night,
             "night_base": night_base,

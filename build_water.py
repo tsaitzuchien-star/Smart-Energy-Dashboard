@@ -44,6 +44,15 @@ def parse_bill_sheet(ws_rows):
     return out
 
 
+def _latest(days):
+    """最後一個水表指針的日期時刻（台水智慧水表約每天凌晨一次上傳前一天的逐時資料）。"""
+    for x in reversed(days):
+        if x["hours"]:
+            h = max(int(k) for k in x["hours"])
+            return {"date": x["date"], "hour": h, "reading": x["hours"][str(h)]}
+    return None
+
+
 def build_water_json(readings_text, estimates_text, status, now, is_holiday=None, bills=None, bills_src=None):
     rows = _csv_rows(readings_text)
     if not rows:
@@ -57,7 +66,8 @@ def build_water_json(readings_text, estimates_text, status, now, is_holiday=None
     cut = (now.date() - timedelta(days=KEEP_DAYS)).isoformat()
     slim = [{"d": x["date"], "off": x["off"], "use": x["use"], "est": x["est"], "night": x["night"],
              "nm": x["night_moving"], "rf": x["refills"], "h": x["hours"],
-             "r7": r7.get(wa._d(x["date"]))} for x in days if x["date"] >= cut]
+             "r7": r7.get(wa._d(x["date"])),
+             "up": x["use_partial"], "ut": x["partial_to"]} for x in days if x["date"] >= cut]
     hours = sorted({int(h) for x in days for h in x["hours"]})
     st = {k: status.get(k) for k in ("meter_update_time", "current_reading", "current_period_usage", "next_period_usage",
                                      "current_fee", "last_fee", "next_fee", "outage_notice", "outage_list", "anomaly_status",
@@ -66,6 +76,7 @@ def build_water_json(readings_text, estimates_text, status, now, is_holiday=None
         "updated": now.strftime("%Y-%m-%d %H:%M"),
         "water_no": "B1801146550",
         "data_until": last["date"] if last else None,
+        "latest_reading": _latest(days),
         "first_day": days[0]["date"],
         "hours": hours,
         "status": st,
