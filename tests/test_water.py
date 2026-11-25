@@ -179,3 +179,13 @@ def test_anomaly_list_loading_is_not_alarm():
                        (wc.parse_anomaly_list(bad), True)):
         al = wa.evaluate(days, {"anomaly_status": an}, today=max(s))
         assert any(a["code"] == "taiwater" for a in al) is expect
+
+
+def test_latest_day_partial_use():
+    s = _steady(date(2026, 11, 1), 5)
+    days = wa.daily_table(_rows(s))
+    assert days[-1]["use"] is None and days[-1]["use_partial"] == 22 and days[-1]["partial_to"] == 15
+    text = "date,hour,reading\n" + "\n".join(f"{r['date']},{r['hour']},{r['reading']}" for r in _rows(s))
+    j = build_water.build_water_json(text, "", {}, datetime(2026, 11, 6, 9, 0))
+    assert j["latest_reading"]["date"] == "2026-11-05" and j["latest_reading"]["hour"] == 15
+    assert j["days"][-1]["up"] == 22 and j["days"][-2]["up"] is None
