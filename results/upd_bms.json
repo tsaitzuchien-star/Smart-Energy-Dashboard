@@ -1,12 +1,15 @@
 {
- "id": "2026-11-24-xiemqd-pr92-hub",
+ "id": "2026-11-25-k32-pr95-ice15-iboffset",
  "kind": "update",
  "pc": "bms",
- "time": "2026-11-24 16:46:01",
+ "time": "2026-11-25 16:01:01",
  "requested_by": "Cliff Tsai",
- "note": "PR #92：總覽頁成果卡改連依 02 總表更新的新版、拿掉警示（hub.html）；Cliff 2026-11-24 16:44「好」",
+ "note": "PR #95：冰桶15 驗收通過移除故障標示（index.html、ems_calc.py）＋指令信箱加入冰桶液位校正 iboffset（sched_cmd.ps1）；Cliff 2026-11-25 15:58「執行」",
  "status": "done",
  "lines": [
-  "監控電腦：hub.html 已更新（cb102e4，舊檔備份 backup\\hub.html.20261124_164602）"
+  "監控電腦：index.html 已更新（c967d8e，舊檔備份 backup\\index.html.20261125_160104）",
+  "監控電腦：tools/ems_calc.py 已更新（c967d8e，舊檔備份 backup\\ems_calc.py.20261125_160104）",
+  "已重啟排程 CTIC_Local_Live",
+  "網站 localhost:8088 有回應 ✅"
  ]
 }
