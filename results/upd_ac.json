@@ -1,0 +1,12 @@
+{
+ "id": "2026-11-25-k32-pr95-ice15-iboffset",
+ "kind": "update",
+ "pc": "ac",
+ "time": "2026-11-25 16:02:01",
+ "requested_by": "Cliff Tsai",
+ "note": "PR #95：冰桶15 驗收通過移除故障標示（index.html、ems_calc.py）＋指令信箱加入冰桶液位校正 iboffset（sched_cmd.ps1）；Cliff 2026-11-25 15:58「執行」",
+ "status": "done",
+ "lines": [
+  "空調監控主機：tools/sched_cmd.ps1 已更新（c967d8e，舊檔備份 backup\\sched_cmd.ps1.20261125_160202）"
+ ]
+}
